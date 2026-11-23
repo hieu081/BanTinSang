@@ -3,7 +3,11 @@
 // Định luật Ohm & Tỏa nhiệt LDO, Độ rộng mạch đồng PCB (IPC-2221), Shunt đo dòng,
 // Pin LiPo/18650, Lọc RC & Timer PWM, Mô-men/RPM/Steps/mm/AWG, Encoder, Khí nén, Tra cứu linh kiện.
 import { BOARDS, CONNECTORS } from './data/pinouts.js';
-import { $, $$, esc, num } from './utils.js';
+import { PARTS } from './data/parts.js';
+import { getSettings } from './storage.js';
+import { callGemini } from './feeds.js';
+import * as tts from './tts.js';
+import { $, $$, esc, num, toast } from './utils.js';
 
 /* ==========================================================================
    1. HÀM TOÁN HỌC THUẦN (exported để kiểm thử & tái sử dụng)
@@ -348,6 +352,85 @@ export function calcPneumatic(boreMm, rodMm, bar) {
   return { fPushN, fPullN, fPushKgf: fPushN / 9.80665, fPullKgf: fPullN / 9.80665 };
 }
 
+/** Tìm Top 5 cặp điện trở E12 phổ thông ghép Song song (//) hoặc Nối tiếp (+) sát giá trị cần nhất */
+const E12_BASE = [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2];
+export function findResistorCombos(targetOhms) {
+  if (!(targetOhms > 0) || targetOhms > 1e8) return [];
+  const pool = [];
+  const expCenter = Math.floor(Math.log10(targetOhms));
+  for (let e = Math.max(0, expCenter - 2); e <= Math.min(7, expCenter + 2); e++) {
+    const p = Math.pow(10, e);
+    for (const v of E12_BASE) pool.push(Math.round(v * p * 100) / 100);
+  }
+  const results = [];
+  for (let i = 0; i < pool.length; i++) {
+    for (let j = i; j < pool.length; j++) {
+      const a = pool[i], b = pool[j];
+      const ser = a + b;
+      const errSer = Math.abs(ser - targetOhms) / targetOhms * 100;
+      if (errSer < 6) results.push({ mode: '+', a, b, val: ser, errPct: errSer });
+      const par = (a * b) / (a + b);
+      const errPar = Math.abs(par - targetOhms) / targetOhms * 100;
+      if (errPar < 6) results.push({ mode: '//', a, b, val: par, errPct: errPar });
+    }
+  }
+  results.sort((x, y) => x.errPct - y.errPct);
+  const out = [];
+  const seen = new Set();
+  for (const r of results) {
+    const k = `${r.mode}:${r.a}:${r.b}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(r);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+/** Tính sụt áp dây đồng 2 chiều (đi + về): ΔV = 2 · ρ · L · I / A (ρ_Cu = 0.01724 Ω·mm²/m) */
+export function calcVoltageDrop({ vSrc, currentA, lengthM, areaMm2 }) {
+  if (!(vSrc > 0) || !(currentA > 0) || !(lengthM > 0) || !(areaMm2 > 0)) {
+    return { error: 'Nhập nguồn, dòng tải, chiều dài dây và tiết diện > 0.' };
+  }
+  const rWire = (2 * 0.01724 * lengthM) / areaMm2;
+  const vDrop = rWire * currentA;
+  const pct = (vDrop / vSrc) * 100;
+  const vLoad = Math.max(0, vSrc - vDrop);
+  const pLoss = vDrop * currentA;
+  return { rWire, vDrop, pct, vLoad, pLoss };
+}
+
+/** Tính đóng Pack Pin 18650 (Li-ion) hoặc LiFePO4 theo cấu hình nS mP */
+export function calcBatteryPack({ chem = 'liion', s = 3, p = 2, cellMah = 2600, cellAmp = 10 }) {
+  if (!(s >= 1) || !(p >= 1) || !(cellMah > 0) || !(cellAmp > 0)) {
+    return { error: 'Nhập thông số cell và cấu hình S/P hợp lệ.' };
+  }
+  const vSpec = chem === 'lifepo4'
+    ? { nom: 3.2, full: 3.65, cut: 2.5, label: 'LiFePO4 (3.2V)' }
+    : { nom: 3.7, full: 4.2, cut: 3.2, label: 'Li-ion 18650 (3.7V)' };
+  const totalCells = s * p;
+  const vNom = s * vSpec.nom;
+  const vFull = s * vSpec.full;
+  const vCut = s * vSpec.cut;
+  const capAh = (cellMah * p) / 1000;
+  const wh = vNom * capAh;
+  const maxA = cellAmp * p;
+  const maxW = vNom * maxA;
+  return { label: vSpec.label, totalCells, vNom, vFull, vCut, capAh, wh, maxA, maxW };
+}
+
+/** Tính nhanh chi phí In 3D (nhựa + tiền điện) */
+export function calc3DPrintCost({ grams, pricePerKg = 280000, hours = 2, watts = 120, elecRate = 2500 }) {
+  if (!(grams > 0) || !(pricePerKg >= 0) || !(hours >= 0) || !(watts >= 0)) {
+    return { error: 'Nhập khối lượng nhựa (> 0) và thời gian in hợp lệ.' };
+  }
+  const plasticCost = (grams / 1000) * pricePerKg;
+  const kwh = (watts * hours) / 1000;
+  const elecCost = kwh * elecRate;
+  const total = plasticCost + elecCost;
+  return { plasticCost, kwh, elecCost, total };
+}
+
 const AWG_DATA = [
   { awg: 10, d: 2.588, area: 5.26, r: 3.28, iOpen: 55, iBundle: 15 },
   { awg: 12, d: 2.053, area: 3.31, r: 5.21, iOpen: 41, iBundle: 9.3 },
@@ -484,6 +567,51 @@ export function init() {
   if (!root) return;
 
   root.innerHTML = `
+    <!-- 0. SOI LINH KIỆN & ĐỌC MẠCH BẰNG CAMERA AI -->
+    <details class="acc" id="tool-vision">
+      <summary>
+        <span class="ico">📸</span>
+        <span>Soi linh kiện &amp; Đọc mạch (Camera AI)<span class="sub">Chụp IC chữ mờ · Đọc vòng màu · Kiểm tra sơ đồ</span></span>
+        <span class="chev">›</span>
+      </summary>
+      <div class="acc-body">
+        <input type="file" id="vis-file" accept="image/*" capture="environment" hidden>
+        <label class="field" style="margin-bottom:8px"><span>Ghi chú muốn hỏi AI (tùy chọn)</span>
+          <input class="input" id="vis-note" placeholder="VD: Con IC này tên gì, thứ tự chân, cách đo sống/chết?">
+        </label>
+        <div class="btn-row">
+          <button class="btn primary" id="vis-pick">📷 Chụp / Chọn ảnh linh kiện</button>
+          <button class="btn" id="vis-speak" hidden>🔊 Nghe AI đọc</button>
+        </div>
+        <img id="vis-preview" hidden alt="Ảnh linh kiện" style="width:100%;max-height:220px;object-fit:contain;border-radius:10px;margin-top:10px;border:1px solid var(--border)">
+        <div class="result" id="vis-out" style="font-family:var(--font);font-size:13.5px;line-height:1.5">
+          <span class="muted">Chụp ảnh linh kiện, điện trở hoặc góc bo mạch — ảnh được nén nhỏ (&lt;120 KB) để tiết kiệm 4G rồi gửi Gemini 3.8 Flash phân tích.</span>
+        </div>
+      </div>
+    </details>
+
+    <!-- 0b. TRA NHANH CHÂN & MÃ THAY THẾ LINH KIỆN PHỔ THÔNG -->
+    <details class="acc" id="tool-parts">
+      <summary>
+        <span class="ico">🔌</span>
+        <span>Tra chân &amp; Mã thay thế Linh kiện (Offline)<span class="sub">24 IC/MOSFET/BJT phổ biến: IRFZ44N, LM317, 7805…</span></span>
+        <span class="chev">›</span>
+      </summary>
+      <div class="acc-body">
+        <input class="input mono" id="parts-q" placeholder="Gõ mã: IRFZ44N, IRLZ44N, LM317, 2N2222, PC817, TMC2209…" autocomplete="off">
+        <div class="chips" style="margin-top:8px">
+          <button class="chip" data-pq="IRFZ44N">IRFZ44N</button>
+          <button class="chip" data-pq="IRLZ44N">IRLZ44N</button>
+          <button class="chip" data-pq="LM317">LM317</button>
+          <button class="chip" data-pq="AMS1117">AMS1117</button>
+          <button class="chip" data-pq="2N2222">2N2222A</button>
+          <button class="chip" data-pq="PC817">PC817</button>
+          <button class="chip" data-pq="TMC2209">TMC2209</button>
+        </div>
+        <div id="parts-list" style="margin-top:10px"></div>
+      </div>
+    </details>
+
     <!-- 1. SƠ ĐỒ CHÂN TƯƠNG TÁC -->
     <details class="acc" open id="tool-pinout">
       <summary>
@@ -565,6 +693,21 @@ export function init() {
             <button class="chip" data-smd="68X">68X</button>
           </div>
           <div class="result" id="smd-out"></div>
+        </div>
+
+        <div class="tool-block">
+          <h4>🔍 Tìm cặp Điện trở ghép Song song / Nối tiếp</h4>
+          <div class="input-unit">
+            <input class="input mono" id="rcmb-val" type="text" inputmode="decimal" value="750" placeholder="Giá trị cần (VD: 750)">
+            <select class="input mono" id="rcmb-unit"><option value="1" selected>Ω</option><option value="1000">kΩ</option><option value="1000000">MΩ</option></select>
+          </div>
+          <div class="chips" style="margin-top:8px">
+            <button class="chip" data-rcmb="750,1">750 Ω</button>
+            <button class="chip" data-rcmb="3.3,1000">3.3 kΩ</button>
+            <button class="chip" data-rcmb="2.5,1000">2.5 kΩ</button>
+            <button class="chip" data-rcmb="150,1">150 Ω</button>
+          </div>
+          <div class="result" id="rcmb-out"></div>
         </div>
 
         <div class="tool-block">
@@ -661,32 +804,51 @@ export function init() {
       </div>
     </details>
 
-    <!-- 5. PIN LIPO / 18650 -->
+    <!-- 5. PIN LIPO / 18650 & ĐÓNG PACK PIN -->
     <details class="acc" id="tool-bat">
       <summary>
         <span class="ico">🔋</span>
-        <span>Ước lượng Pin LiPo / 18650<span class="sub">1S–6S · % SoC · Cảnh báo xả sâu · Thời gian chạy</span></span>
+        <span>Pin LiPo / 18650 &amp; Đóng Pack nS mP<span class="sub">1S–6S % SoC · Ghép Pack 18650 / LiFePO4</span></span>
         <span class="chev">›</span>
       </summary>
       <div class="acc-body">
-        <div class="grid-2">
-          <label class="field"><span>Số cell (S)</span>
-            <select class="input mono" id="bat-s">
-              <option value="1">1S (3.7V)</option>
-              <option value="2">2S (7.4V)</option>
-              <option value="3" selected>3S (11.1V)</option>
-              <option value="4">4S (14.8V)</option>
-              <option value="5">5S (18.5V)</option>
-              <option value="6">6S (22.2V)</option>
-            </select>
-          </label>
-          <label class="field"><span>Điện áp đo (V)</span><input class="input mono" id="bat-v" type="text" inputmode="decimal" value="11.4"></label>
+        <div class="tool-block">
+          <h4>Ước lượng % SoC Pin LiPo / 18650</h4>
+          <div class="grid-2">
+            <label class="field"><span>Số cell (S)</span>
+              <select class="input mono" id="bat-s">
+                <option value="1">1S (3.7V)</option>
+                <option value="2">2S (7.4V)</option>
+                <option value="3" selected>3S (11.1V)</option>
+                <option value="4">4S (14.8V)</option>
+                <option value="5">5S (18.5V)</option>
+                <option value="6">6S (22.2V)</option>
+              </select>
+            </label>
+            <label class="field"><span>Điện áp đo (V)</span><input class="input mono" id="bat-v" type="text" inputmode="decimal" value="11.4"></label>
+          </div>
+          <div class="grid-2" style="margin-top:8px">
+            <label class="field"><span>Dung lượng (mAh)</span><input class="input mono" id="bat-cap" type="text" inputmode="decimal" value="2200"></label>
+            <label class="field"><span>Dòng tải (mA)</span><input class="input mono" id="bat-load" type="text" inputmode="decimal" value="800"></label>
+          </div>
+          <div class="result" id="bat-out"></div>
         </div>
-        <div class="grid-2" style="margin-top:8px">
-          <label class="field"><span>Dung lượng (mAh)</span><input class="input mono" id="bat-cap" type="text" inputmode="decimal" value="2200"></label>
-          <label class="field"><span>Dòng tải (mA)</span><input class="input mono" id="bat-load" type="text" inputmode="decimal" value="800"></label>
+
+        <div class="tool-block">
+          <h4>Tính đóng Pack Pin 18650 / LiFePO4 (nS mP)</h4>
+          <div class="grid-3">
+            <label class="field"><span>Loại cell</span>
+              <select class="input" id="pk-chem"><option value="liion" selected>18650 (3.7V)</option><option value="lifepo4">LiFePO4 (3.2V)</option></select>
+            </label>
+            <label class="field"><span>Nối tiếp (S)</span><input class="input mono" id="pk-s" type="text" inputmode="decimal" value="3"></label>
+            <label class="field"><span>Song song (P)</span><input class="input mono" id="pk-p" type="text" inputmode="decimal" value="2"></label>
+          </div>
+          <div class="grid-2" style="margin-top:8px">
+            <label class="field"><span>Dung lượng 1 cell (mAh)</span><input class="input mono" id="pk-mah" type="text" inputmode="decimal" value="2600"></label>
+            <label class="field"><span>Dòng xả 1 cell (A)</span><input class="input mono" id="pk-amp" type="text" inputmode="decimal" value="10"></label>
+          </div>
+          <div class="result" id="pk-out"></div>
         </div>
-        <div class="result" id="bat-out"></div>
       </div>
     </details>
 
@@ -830,6 +992,37 @@ export function init() {
         </div>
 
         <div class="tool-block">
+          <h4>🖨️ Tính nhanh chi phí In 3D (Nhựa + Điện)</h4>
+          <div class="grid-2">
+            <label class="field"><span>Khối lượng nhựa (gram)</span><input class="input mono" id="p3d-g" type="text" inputmode="decimal" value="45"></label>
+            <label class="field"><span>Giá cuộn nhựa (₫/kg)</span><input class="input mono" id="p3d-pkg" type="text" inputmode="decimal" value="280000"></label>
+          </div>
+          <div class="grid-3" style="margin-top:8px">
+            <label class="field"><span>Giờ in</span><input class="input mono" id="p3d-h" type="text" inputmode="decimal" value="3.5"></label>
+            <label class="field"><span>Công suất (W)</span><input class="input mono" id="p3d-w" type="text" inputmode="decimal" value="120"></label>
+            <label class="field"><span>Giá điện (₫)</span><input class="input mono" id="p3d-el" type="text" inputmode="decimal" value="2500"></label>
+          </div>
+          <div class="result" id="p3d-out"></div>
+        </div>
+
+        <div class="tool-block">
+          <h4>⚡ Tính sụt áp dây dẫn (Voltage Drop)</h4>
+          <div class="grid-2">
+            <label class="field"><span>Nguồn V (V)</span><input class="input mono" id="vd-v" type="text" inputmode="decimal" value="12"></label>
+            <label class="field"><span>Dòng tải (A)</span><input class="input mono" id="vd-i" type="text" inputmode="decimal" value="5"></label>
+          </div>
+          <div class="grid-2" style="margin-top:8px">
+            <label class="field"><span>Chiều dài 1 chiều (m)</span><input class="input mono" id="vd-l" type="text" inputmode="decimal" value="3"></label>
+            <label class="field"><span>Cỡ dây đồng</span>
+              <select class="input mono" id="vd-awg">
+                ${AWG_DATA.map((a) => `<option value="${a.area}"${a.awg === 18 ? ' selected' : ''}>AWG ${a.awg} (${a.area} mm²)</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div class="result" id="vd-out"></div>
+        </div>
+
+        <div class="tool-block">
           <h4>Bảng tra nhanh Dây điện AWG ↔ mm²</h4>
           <label class="field" style="margin-bottom:8px"><span>Lọc theo dòng tải cần chịu (A) — tô sáng cỡ dây đạt chuẩn</span>
             <input class="input mono" id="awg-amp" type="text" inputmode="decimal" placeholder="VD: 5 (để trống xem toàn bảng)">
@@ -872,10 +1065,120 @@ export function init() {
     </details>
   `;
 
+  bindVision();
+  bindPartsLookup();
   bindPinout();
   bindResistorColor();
   bindCalcs();
   bindLauncher();
+}
+
+/* ---------- Camera AI Soi linh kiện (nén ảnh JPEG ≤ 1024px tiết kiệm 4G) ---------- */
+function compressImageFile(file, maxSide = 1024, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Không đọc được ảnh'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Ảnh không hợp lệ'));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        const dataUrl = cv.toDataURL('image/jpeg', quality);
+        resolve({ dataUrl, base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function bindVision() {
+  const fileInp = $('#vis-file');
+  const pickBtn = $('#vis-pick');
+  const speakBtn = $('#vis-speak');
+  const imgEl = $('#vis-preview');
+  const out = $('#vis-out');
+  let lastVisionText = '';
+
+  pickBtn.addEventListener('click', () => {
+    if (!getSettings().geminiKey) {
+      toast('Hãy nhập Gemini API Key trong Tab 4 → Cài đặt trước');
+      return;
+    }
+    fileInp.click();
+  });
+
+  speakBtn.addEventListener('click', () => {
+    if (!lastVisionText) return;
+    tts.playCustom([{ text: lastVisionText, display: 'Phân tích linh kiện từ Camera AI', sel: '#tool-vision' }]);
+    toast('🎙️ Đang đọc kết quả soi linh kiện…');
+  });
+
+  fileInp.addEventListener('change', async () => {
+    const f = fileInp.files?.[0];
+    fileInp.value = '';
+    if (!f) return;
+    const key = getSettings().geminiKey;
+    if (!key) { toast('Thiếu Gemini API Key'); return; }
+    pickBtn.disabled = true;
+    speakBtn.hidden = true;
+    out.innerHTML = '<div class="skel skel-line"></div><div class="skel skel-line" style="width:80%"></div><div class="skel skel-line" style="width:60%"></div>';
+    try {
+      const { dataUrl, base64, mimeType } = await compressImageFile(f);
+      imgEl.src = dataUrl;
+      imgEl.hidden = false;
+      const note = ($('#vis-note')?.value || '').trim();
+      const prompt = `Bạn là kỹ sư điện tử Cơ điện tử đang soi ảnh cho Hiếu.
+Hãy quan sát ảnh và trả lời thật súc tích, thực chiến bằng tiếng Việt (không dùng dấu sao ** đậm nhạt):
+1) Nhận diện: Tên/mã linh kiện hoặc loại mạch trong ảnh (nếu chữ mờ hãy đọc hết mức có thể và nói rõ độ chắc chắn).
+2) Thứ tự chân / Thông số chính (V, A, giá trị Ω/µF nếu là trở/tụ).
+3) Cách kiểm tra nhanh sống/chết bằng đồng hồ vạn năng hoặc lưu ý tránh cháy mạch.
+${note ? `Yêu cầu thêm của Hiếu: ${note}` : ''}`;
+      const res = await callGemini(key, prompt, { data: base64, mimeType });
+      lastVisionText = res.replace(/\*\*/g, '').trim();
+      out.innerHTML = `<div style="white-space:pre-wrap">${esc(lastVisionText)}</div>`;
+      speakBtn.hidden = false;
+    } catch (e) {
+      out.innerHTML = `<span class="err">Lỗi soi ảnh: ${esc(e.message)}</span>`;
+    } finally {
+      pickBtn.disabled = false;
+    }
+  });
+}
+
+/* ---------- Tra cứu chân & mã thay thế 24 linh kiện phổ thông ---------- */
+function bindPartsLookup() {
+  const inp = $('#parts-q');
+  const box = $('#parts-list');
+  const render = () => {
+    const q = (inp.value || '').trim().toLowerCase();
+    const list = q
+      ? PARTS.filter((p) => `${p.name} ${p.type} ${p.pkg} ${p.equiv} ${p.spec}`.toLowerCase().includes(q))
+      : PARTS.slice(0, 5);
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">Không thấy mã này trong 24 linh kiện phổ thông — thử dùng mục "Tra cứu nhanh Linh kiện" bên dưới.</div>';
+      return;
+    }
+    box.innerHTML = list.map((p) => `
+      <div class="result" style="margin-top:8px;font-family:var(--font)">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <b class="mono" style="font-size:16px;color:var(--cyan)">${esc(p.name)}</b>
+          <span class="tag">${esc(p.type)} · ${esc(p.pkg)}</span>
+        </div>
+        <div style="margin-top:6px;font-size:13px"><b style="color:var(--green)">Chân:</b> <span class="mono">${esc(p.pins)}</span></div>
+        <div style="margin-top:4px;font-size:12.5px;color:var(--text)"><b>Thông số:</b> ${esc(p.spec)}</div>
+        <div style="margin-top:4px;font-size:12.5px;color:var(--amber)"><b>Thay thế:</b> ${esc(p.equiv)}</div>
+        <div style="margin-top:4px;font-size:12px;color:var(--muted)">💡 ${esc(p.note)}</div>
+      </div>`).join('');
+  };
+  inp.addEventListener('input', render);
+  $$('[data-pq]').forEach((b) => b.addEventListener('click', () => { inp.value = b.dataset.pq; render(); }));
+  render();
 }
 
 /* ---------- Binding sự kiện ---------- */
@@ -962,6 +1265,86 @@ function bindCalcs() {
   $('#smd-code').addEventListener('input', updateSMD);
   $$('[data-smd]').forEach((b) => b.addEventListener('click', () => { $('#smd-code').value = b.dataset.smd; updateSMD(); }));
   updateSMD();
+
+  // 1a. Resistor Combo Finder (Parallel / Series)
+  const updateRCombo = () => {
+    const out = $('#rcmb-out');
+    const target = num($('#rcmb-val').value) * Number($('#rcmb-unit').value);
+    const list = findResistorCombos(target);
+    if (!list.length) { out.innerHTML = '<span class="err">Nhập giá trị hợp lệ (1 Ω – 100 MΩ).</span>'; return; }
+    out.innerHTML = list.map((r) => `
+      <div class="line">
+        <span><b>${fmtOhm(r.a)} ${r.mode} ${fmtOhm(r.b)}</b></span>
+        <span>${fmtOhm(r.val)} <small style="color:${r.errPct < 1 ? 'var(--green)' : 'var(--amber)'}">(${r.errPct.toFixed(2)}%)</small></span>
+      </div>`).join('');
+  };
+  $('#rcmb-val').addEventListener('input', updateRCombo);
+  $('#rcmb-unit').addEventListener('change', updateRCombo);
+  $$('[data-rcmb]').forEach((b) => b.addEventListener('click', () => {
+    const [v, u] = b.dataset.rcmb.split(',');
+    $('#rcmb-val').value = v;
+    $('#rcmb-unit').value = u;
+    updateRCombo();
+  }));
+  updateRCombo();
+
+  // 1b. Battery Pack nS mP
+  const updatePack = () => {
+    const out = $('#pk-out');
+    const r = calcBatteryPack({
+      chem: $('#pk-chem').value,
+      s: Math.round(num($('#pk-s').value)),
+      p: Math.round(num($('#pk-p').value)),
+      cellMah: num($('#pk-mah').value),
+      cellAmp: num($('#pk-amp').value),
+    });
+    if (r.error) { out.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+    out.innerHTML = `<span class="big cyan">${r.vNom.toFixed(1)}V · ${r.capAh.toFixed(1)}Ah <small style="font-size:13px;color:var(--muted)">(${r.wh.toFixed(0)} Wh)</small></span>
+      <div class="line"><span>Tổng số cell cần mua</span><b>${r.totalCells} cell (${esc(r.label)})</b></div>
+      <div class="line"><span>Sạc đầy / Ngắt xả</span><span>${r.vFull.toFixed(2)}V / ${r.vCut.toFixed(2)}V</span></div>
+      <div class="line"><span>Dòng xả tối đa / Công suất</span><b style="color:var(--green)">${r.maxA.toFixed(0)} A (${r.maxW.toFixed(0)} W)</b></div>`;
+  };
+  $('#pk-chem').addEventListener('change', updatePack);
+  ['#pk-s', '#pk-p', '#pk-mah', '#pk-amp'].forEach((s) => $(s).addEventListener('input', updatePack));
+  updatePack();
+
+  // 1c. 3D Print Cost
+  const updateP3d = () => {
+    const out = $('#p3d-out');
+    const r = calc3DPrintCost({
+      grams: num($('#p3d-g').value),
+      pricePerKg: num($('#p3d-pkg').value),
+      hours: num($('#p3d-h').value),
+      watts: num($('#p3d-w').value),
+      elecRate: num($('#p3d-el').value),
+    });
+    if (r.error) { out.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+    out.innerHTML = `<span class="big">${Math.round(r.total).toLocaleString('vi-VN')} ₫</span>
+      <div class="line"><span>Tiền nhựa</span><span>${Math.round(r.plasticCost).toLocaleString('vi-VN')} ₫</span></div>
+      <div class="line"><span>Tiền điện (${r.kwh.toFixed(2)} kWh)</span><span>${Math.round(r.elecCost).toLocaleString('vi-VN')} ₫</span></div>`;
+  };
+  ['#p3d-g', '#p3d-pkg', '#p3d-h', '#p3d-w', '#p3d-el'].forEach((s) => $(s).addEventListener('input', updateP3d));
+  updateP3d();
+
+  // 1d. Voltage Drop
+  const updateVDrop = () => {
+    const out = $('#vd-out');
+    const r = calcVoltageDrop({
+      vSrc: num($('#vd-v').value),
+      currentA: num($('#vd-i').value),
+      lengthM: num($('#vd-l').value),
+      areaMm2: Number($('#vd-awg').value),
+    });
+    if (r.error) { out.innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+    const cls = r.pct > 5 ? 'red' : r.pct > 3 ? 'amber' : '';
+    out.innerHTML = `<span class="big ${cls}">Sụt ${r.vDrop.toFixed(2)}V (${r.pct.toFixed(1)}%)</span>
+      <div class="line"><span>Điện áp còn lại tại tải</span><b>${r.vLoad.toFixed(2)} V</b></div>
+      <div class="line"><span>Điện trở dây 2 chiều / Hao phí</span><span>${r.rWire.toFixed(3)} Ω · ${r.pLoss.toFixed(2)} W</span></div>
+      ${r.pct > 5 ? '<p class="small" style="color:var(--red);margin:6px 0 0">⚠ Sụt áp > 5% — nên tăng cỡ dây lớn hơn (AWG nhỏ hơn) để tránh reset MCU!</p>' : ''}`;
+  };
+  ['#vd-v', '#vd-i', '#vd-l'].forEach((s) => $(s).addEventListener('input', updateVDrop));
+  $('#vd-awg').addEventListener('change', updateVDrop);
+  updateVDrop();
 
   // 1b. Capacitor Code
   const updateCap = () => {

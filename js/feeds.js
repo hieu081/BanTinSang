@@ -553,16 +553,20 @@ const findItem = (id) => items.find((i) => i.id === id);
 /* ---------- Gemini BYOK ---------- */
 const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
 
-async function tryGeminiModel(model, cleanKey, prompt) {
+async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+  const parts = [{ text: prompt }];
+  if (inlineImage?.data) {
+    parts.push({ inline_data: { mime_type: inlineImage.mimeType || 'image/jpeg', data: inlineImage.data } });
+  }
   const r = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      contents: [{ role: 'user', parts }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
     }),
-  }, 35000);
+  }, 40000);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const msg = j.error?.message || `HTTP ${r.status}`;
@@ -588,7 +592,7 @@ async function discoverFlashModels(cleanKey) {
   }
 }
 
-export async function callGemini(key, prompt) {
+export async function callGemini(key, prompt, inlineImage = null) {
   const cleanKey = String(key || '').trim();
   const tried = new Set();
   const errors = [];
@@ -597,7 +601,7 @@ export async function callGemini(key, prompt) {
       if (tried.has(model)) continue;
       tried.add(model);
       try {
-        return await tryGeminiModel(model, cleanKey, prompt);
+        return await tryGeminiModel(model, cleanKey, prompt, inlineImage);
       } catch (e) {
         if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
         errors.push(`${model}: ${e.message}`);
