@@ -548,40 +548,66 @@ function markRead(id) {
 const findItem = (id) => items.find((i) => i.id === id);
 
 /* ---------- Gemini BYOK ---------- */
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+
+async function tryGeminiModel(model, cleanKey, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+  const r = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
+    }),
+  }, 35000);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = j.error?.message || `HTTP ${r.status}`;
+    if (/API key not valid|API_KEY_INVALID|invalid api key/i.test(msg)) {
+      throw new Error(`API_KEY_INVALID: ${msg}`);
+    }
+    throw new Error(msg);
+  }
+  const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+  if (!text) throw new Error('rỗng');
+  return text;
+}
+
+async function discoverFlashModels(cleanKey) {
+  try {
+    const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {}, 10000);
+    return (j.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent') && /flash/i.test(m.name))
+      .map((m) => m.name.replace(/^models\//, ''))
+      .reverse();
+  } catch (_) {
+    return [];
+  }
+}
 
 async function callGemini(key, prompt) {
   const cleanKey = String(key || '').trim();
+  const tried = new Set();
   const errors = [];
-  for (const model of GEMINI_MODELS) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-      const r = await fetchWithTimeout(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
-        }),
-      }, 35000);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        const msg = j.error?.message || `HTTP ${r.status}`;
-        // Nếu chắc chắn sai API key thì dừng luôn, không cần thử model khác
-        if (/API key not valid|API_KEY_INVALID|invalid api key/i.test(msg)) {
-          throw new Error(`API_KEY_INVALID: ${msg}`);
-        }
-        errors.push(`${model}: ${msg}`);
-        continue;
+  const runList = async (models) => {
+    for (const model of models) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      try {
+        return await tryGeminiModel(model, cleanKey, prompt);
+      } catch (e) {
+        if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
+        errors.push(`${model}: ${e.message}`);
       }
-      const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-      if (text) return text;
-      errors.push(`${model}: rỗng`);
-    } catch (e) {
-      if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
-      errors.push(`${model}: ${e.message}`);
     }
-  }
+    return null;
+  };
+  const first = await runList(GEMINI_MODELS);
+  if (first) return first;
+  // Dự phòng: tự dò model Flash mới nhất từ tài khoản Google AI Studio
+  const dynamic = await discoverFlashModels(cleanKey);
+  const second = await runList(dynamic.slice(0, 3));
+  if (second) return second;
   throw new Error(errors.join(' | ') || 'Không gọi được Gemini API');
 }
 
