@@ -1,5 +1,5 @@
 // app.js — Điều phối 4 tab, vòng đời ứng dụng, đồng hồ, Spark offline, TTS, iOS Banner, Service Worker
-import { store, sync } from './storage.js';
+import { store, sync, getSettings } from './storage.js';
 import { $, $$, esc, toast } from './utils.js';
 import * as telemetry from './telemetry.js';
 import * as feeds from './feeds.js';
@@ -111,8 +111,69 @@ function openSparkSearch() {
   setTimeout(() => wrap.querySelector('#sp-q')?.focus(), 50);
 }
 
+function sparkToSpeech(sp) {
+  return [
+    `Kiến thức Cơ điện tử số ${sp.id}, nhóm ${sp.group}: ${sp.title}.`,
+    sp.body,
+    sp.detail ? `Chi tiết thực chiến: ${sp.detail}` : '',
+    sp.tip ? `Mẹo nhớ nhanh: ${sp.tip}` : '',
+  ].filter(Boolean).join(' ');
+}
+
+async function askAISparkExample() {
+  const key = getSettings().geminiKey;
+  if (!key) { toast('Cần nhập Gemini API Key trong Cài đặt'); return; }
+  const sp = SPARKS[sparkIdx];
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-backdrop';
+  wrap.innerHTML = `
+    <div class="sheet" style="max-height:84vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-label="AI Ví dụ thực chiến">
+      <div class="grab"></div>
+      <h3>💬 Ví dụ thực chiến: ${esc(sp.title)}</h3>
+      <div id="spai-body" style="overflow-y:auto;flex:1;min-height:120px">
+        <div class="skel skel-line"></div><div class="skel skel-line" style="width:85%"></div><div class="skel skel-line" style="width:70%"></div>
+      </div>
+      <button class="btn ghost block" data-close style="margin-top:10px">Đóng</button>
+    </div>`;
+  wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target.closest('[data-close]')) wrap.remove(); });
+  document.body.appendChild(wrap);
+  try {
+    const prompt = `Bạn là kỹ sư Cơ điện tử hướng dẫn cho Hiếu. Với chủ đề "${sp.title}" (${sp.body}), hãy đưa ra 1 ví dụ thực chiến cực ngắn gọn bằng tiếng Việt gồm:
+1) Tình huống áp dụng thực tế (2 câu).
+2) 1 đoạn code C/STM32/Arduino hoặc thông số linh kiện/đấu nối mẫu thật súc tích.
+3) 1 lỗi hay gặp nhất cần tránh.`;
+    const text = await feeds.callGemini(key, prompt);
+    wrap.querySelector('#spai-body').innerHTML = `<div class="result" style="font-family:var(--font);font-size:13.5px;line-height:1.55;white-space:pre-wrap">${esc(text)}</div>`;
+  } catch (e) {
+    wrap.querySelector('#spai-body').innerHTML = `<p class="small" style="color:var(--red)">Lỗi AI: ${esc(e.message)}</p>`;
+  }
+}
+
 function initSpark() {
   renderSpark(true);
+  const syncSparkAI = () => {
+    const b = $('#spark-ai-ask');
+    if (b) b.hidden = !getSettings().geminiKey;
+  };
+  syncSparkAI();
+  window.addEventListener('settings-changed', (e) => {
+    if (e.detail.keys.includes('geminiKey')) syncSparkAI();
+  });
+  $('#spark-speak')?.addEventListener('click', () => {
+    const sp = SPARKS[sparkIdx];
+    tts.playCustom([{ text: sparkToSpeech(sp), display: `#${sp.id} · ${sp.title}`, sel: '#spark-card' }]);
+    toast(`🎧 Đang đọc thẻ #${sp.id}`);
+  });
+  $('#spark-speak5')?.addEventListener('click', () => {
+    const segs = [];
+    for (let i = 0; i < 5; i++) {
+      const sp = SPARKS[(sparkIdx + i) % SPARKS.length];
+      segs.push({ text: sparkToSpeech(sp), display: `Ôn thẻ ${i + 1}/5: ${sp.title}`, sel: '#spark-card' });
+    }
+    tts.playCustom(segs);
+    toast('🎧 Đang đọc nối tiếp 5 thẻ ôn Cơ điện tử…');
+  });
+  $('#spark-ai-ask')?.addEventListener('click', askAISparkExample);
   $('#spark-search')?.addEventListener('click', openSparkSearch);
   $('#spark-today').addEventListener('click', () => {
     sparkIdx = dailySparkIndex();
@@ -227,15 +288,43 @@ function boot() {
 
   $('#refresh-btn').addEventListener('click', () => {
     refreshAll(true);
-    toast('Đang đồng bộ thời tiết, tỷ giá & bản tin…');
+    toast('Đang đồng bộ thời tiết & bản tin…');
   });
+
+  // Nút Podcast AI Sáng nay (1 chạm tổng hợp cả ngày & đọc xuyên suốt)
+  const podBtn = $('#tts-podcast-ai');
+  const syncPodBtn = () => { if (podBtn) podBtn.hidden = !getSettings().geminiKey; };
+  syncPodBtn();
+  podBtn?.addEventListener('click', async () => {
+    podBtn.disabled = true;
+    const oldTxt = podBtn.textContent;
+    podBtn.textContent = '✨ Gemini đang biên tập bản tin hôm nay…';
+    try {
+      const wxText = (telemetry.speech() || []).map((s) => s.text).join(' ');
+      const segs = await feeds.buildAIPodcast(wxText, false);
+      tts.playCustom(segs);
+      toast('🎙️ Đang phát Podcast AI Sáng nay!');
+    } catch (e) {
+      toast(`Lỗi Podcast AI: ${e.message}`);
+    } finally {
+      podBtn.disabled = false;
+      podBtn.textContent = oldTxt;
+    }
+  });
+
   window.addEventListener('force-refresh', () => refreshAll(true));
   window.addEventListener('settings-changed', (e) => {
     if (e.detail.keys.some((k) => ['location', 'useGPS'].includes(k))) telemetry.refresh(true);
+    if (e.detail.keys.includes('geminiKey')) syncPodBtn();
   });
 
-  // Đồng bộ ngầm ngay khi mở app
-  refreshAll(false);
+  // Đồng bộ ngầm khi mở app (bỏ qua nếu bật Tiết kiệm 4G)
+  if (!getSettings().saveData4G) {
+    refreshAll(false);
+  } else {
+    updateSyncLED();
+    toast('📶 Đang bật Tiết kiệm 4G — bấm ↻ khi muốn tải tin mới');
+  }
 
   // Đăng ký Service Worker
   if ('serviceWorker' in navigator) {

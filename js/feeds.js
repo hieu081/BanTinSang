@@ -420,10 +420,12 @@ export function refresh(force = false) {
 /* ---------- Render ---------- */
 const STAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
 const SPEAK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+const AI_READ_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>';
 
 function newsCard(it) {
   const read = readSet.has(it.id);
   const bm = isBookmarked(it.id);
+  const hasKey = !!getSettings().geminiKey;
   const disp = getDisplayText(it);
   const radarBadge = it.radar.length ? '<span class="radar-badge">RADAR</span>' : '';
   const trBadge = disp.translated ? '<span class="tr-badge">🇻🇳 Đã dịch</span>' : (it.lang === 'en' ? '<span class="tag">EN</span>' : '');
@@ -444,6 +446,7 @@ function newsCard(it) {
     <div class="news-actions">
       <div class="chips">${kwChips}</div>
       <div style="display:flex;gap:6px;flex:none">
+        ${hasKey ? `<button class="bm-btn" data-ai-read="${it.id}" aria-label="AI đọc hộ bài này" title="AI Đọc hộ & Tóm tắt">${AI_READ_SVG}</button>` : ''}
         <button class="bm-btn" data-speak-item="${it.id}" aria-label="Nghe nhanh tin này" title="Nghe nhanh">${SPEAK_SVG}</button>
         <button class="bm-btn${bm ? ' on' : ''}" data-bm="${it.id}" aria-label="${bm ? 'Đã lưu' : 'Lưu bài'}">${STAR_SVG}</button>
       </div>
@@ -585,7 +588,7 @@ async function discoverFlashModels(cleanKey) {
   }
 }
 
-async function callGemini(key, prompt) {
+export async function callGemini(key, prompt) {
   const cleanKey = String(key || '').trim();
   const tried = new Set();
   const errors = [];
@@ -671,6 +674,115 @@ ${top}`;
   }
 }
 
+/** AI Đọc hộ toàn văn 1 bài báo (lấy qua /api/article nếu có, tóm gọn ý kỹ thuật + đọc thành tiếng) */
+async function readArticleWithAI(it) {
+  const key = getSettings().geminiKey;
+  if (!key) { toast('Hãy nhập Gemini API Key trong Cài đặt trước'); return; }
+  const disp = getDisplayText(it);
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-backdrop';
+  wrap.innerHTML = `
+    <div class="sheet" style="max-height:84vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-label="AI Đọc hộ bài báo">
+      <div class="grab"></div>
+      <h3>📖 AI Đọc hộ &amp; Tóm tắt</h3>
+      <p style="font-weight:600;color:var(--text-strong)">${esc(disp.title)}</p>
+      <div id="airead-body" style="overflow-y:auto;flex:1;min-height:120px">
+        <div class="skel skel-line"></div><div class="skel skel-line" style="width:85%"></div><div class="skel skel-line" style="width:70%"></div>
+      </div>
+      <div class="btn-row" style="margin-top:10px">
+        <button class="btn primary" id="airead-speak" disabled>🔊 Nghe tóm tắt</button>
+        <a class="btn" href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">Mở bài gốc</a>
+        <button class="btn ghost" data-close>Đóng</button>
+      </div>
+    </div>`;
+  wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target.closest('[data-close]')) wrap.remove(); });
+  document.body.appendChild(wrap);
+
+  let articleText = '';
+  try {
+    const base = apiBase();
+    const r = await fetchJSON(`${base}/api/article?url=${encodeURIComponent(it.link)}`, {}, 12000);
+    if (r?.text && r.text.length > 120) articleText = r.text;
+  } catch (_) { /* fallback dùng tiêu đề + mô tả RSS */ }
+
+  const sourceText = articleText || `${it.title}\n${it.desc || ''}`;
+  const prompt = `Bạn là trợ lý kỹ thuật Cơ điện tử đọc báo hộ cho Hiếu.
+Hãy đọc nội dung bài viết sau và tóm tắt bằng tiếng Việt (giữ đúng thuật ngữ chuyên ngành như STM32, ESP32, ROS 2, FOC, PID, PLC, PWM, MOSFET...):
+- Dòng 1: 1 câu chốt bài này nói về cái gì.
+- 3 gạch đầu dòng ("- "): các ý kỹ thuật cốt lõi / thông số quan trọng nhất.
+- Dòng cuối: 1 câu nhận xét ứng dụng thực tế (nếu có).
+Không dùng dấu sao ** đậm nhạt.
+
+TIÊU ĐỀ: ${it.title}
+NGUỒN: ${it.source}
+NỘI DUNG:
+${sourceText.slice(0, 5000)}`;
+
+  try {
+    const raw = await callGemini(key, prompt);
+    const lines = raw.split('\n').map((l) => l.trim().replace(/\*\*/g, '')).filter((l) => l.length > 4);
+    wrap.querySelector('#airead-body').innerHTML = `
+      <div class="result" style="font-family:var(--font);font-size:14px;line-height:1.55">
+        ${lines.map((l) => `<p style="margin:6px 0">${esc(l)}</p>`).join('')}
+      </div>
+      <p class="tiny muted" style="margin-top:6px">${articleText ? '✓ Đã đọc toàn văn bài báo gốc' : 'ℹ Tóm tắt từ mô tả RSS'}</p>`;
+    const spkBtn = wrap.querySelector('#airead-speak');
+    spkBtn.disabled = false;
+    spkBtn.onclick = () => {
+      tts.playCustom([
+        { text: `Tóm tắt bài viết từ ${it.source}: ${disp.title}.`, display: disp.title, sel: null },
+        ...lines.map((l) => ({ text: l.replace(/^[-•*]\s*/, ''), display: l, sel: null })),
+      ]);
+      toast('🎙️ Đang đọc tóm tắt bài viết…');
+    };
+  } catch (e) {
+    wrap.querySelector('#airead-body').innerHTML = `<p class="small" style="color:var(--red)">Lỗi AI: ${esc(e.message)}</p>`;
+  }
+}
+
+/** Biên tập Podcast AI Sáng nay hoàn chỉnh dành cho Hiếu (có cache trong ngày) */
+export async function buildAIPodcast(weatherText = '', force = false) {
+  const key = getSettings().geminiKey;
+  if (!key) throw new Error('Chưa nhập Gemini API Key trong Cài đặt.');
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const cached = store.get('podcastCache');
+  if (!force && cached && cached.day === todayKey && Array.isArray(cached.segments) && cached.segments.length) {
+    return cached.segments;
+  }
+  const kw = getSettings().radar;
+  const top = sorted(items).filter(isTechItem).slice(0, 16)
+    .map((it, i) => `${i + 1}. [${it.source}] ${getDisplayText(it).title}${it.desc ? ` — ${clip(getDisplayText(it).desc, 140)}` : ''}`).join('\n');
+  if (!top) throw new Error('Chưa có tin tức nào để tổng hợp — hãy bấm ↻ tải tin trước.');
+
+  const h = new Date().getHours();
+  const buoi = h < 11 ? 'buổi sáng' : h < 14 ? 'buổi trưa' : h < 18 ? 'buổi chiều' : 'buổi tối';
+  const prompt = `Bạn là phát thanh viên bản tin công nghệ Cơ điện tử nói chuyện tự nhiên, thân thiện với Hiếu vào ${buoi}.
+Hãy tổng hợp dữ liệu thời tiết và danh sách tin bên dưới thành ĐÚNG 6 ĐOẠN NGẮN (mỗi đoạn trên 1 dòng riêng, mỗi đoạn 25–45 từ, KHÔNG đánh số, KHÔNG dùng dấu sao hay gạch đầu dòng):
+- Đoạn 1: Chào ${buoi} Hiếu + tóm tắt ngắn thời tiết và cảnh báo ẩm bo mạch/nhựa in 3D hôm nay.
+- Đoạn 2 đến Đoạn 5: 4 tin kỹ thuật quan trọng nhất trong ngày (ưu tiên tin Việt Nam và các từ khóa ${kw.join(', ')}), gộp tin trùng, giải thích ngắn gọn tại sao đáng chú ý.
+- Đoạn 6: Lời kết ngắn gọn chúc Hiếu học tập và làm đồ án hiệu quả.
+
+THỜI TIẾT HÔM NAY:
+${weatherText || 'Chưa có dữ liệu thời tiết.'}
+
+DANH SÁCH TIN TRONG NGÀY:
+${top}`;
+
+  const raw = await callGemini(key, prompt);
+  const lines = raw.split('\n')
+    .map((l) => l.trim().replace(/^([-*•]|\d+[.)]|Đoạn\s*\d+:?)\s*/i, '').replace(/\*\*/g, ''))
+    .filter((l) => l.length > 15)
+    .slice(0, 7);
+  if (!lines.length) throw new Error('AI không tạo được kịch bản podcast.');
+  const segments = lines.map((text, i) => ({
+    text,
+    display: text,
+    sel: i === 0 ? '#wx-card' : '#tts-card',
+  }));
+  store.set('podcastCache', { day: todayKey, ts: Date.now(), segments });
+  return segments;
+}
+
 /* ---------- Khởi tạo ---------- */
 export function init() {
   rebuild();
@@ -687,6 +799,12 @@ export function init() {
   document.addEventListener('click', async (e) => {
     const open = e.target.closest('a[data-open]');
     if (open) { markRead(open.dataset.open); return; }
+    const airead = e.target.closest('[data-ai-read]');
+    if (airead) {
+      const it = findItem(airead.dataset.aiRead);
+      if (it) readArticleWithAI(it);
+      return;
+    }
     const spk = e.target.closest('[data-speak-item]');
     if (spk) {
       const it = findItem(spk.dataset.speakItem);

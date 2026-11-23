@@ -9,6 +9,7 @@ server.py — Máy chủ cục bộ cho Mechatronics Morning Hub
 import asyncio
 import json
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -99,7 +100,25 @@ class HubHandler(SimpleHTTPRequestHandler):
                 voices.append({"id": "edge:vi-VN-HoaiMyNeural", "label": "★ Hoài My Neural (Nữ — Tự nhiên)"})
                 voices.append({"id": "edge:vi-VN-NamMinhNeural", "label": "★ Nam Minh Neural (Nam — Trầm ấm)"})
             voices.append({"id": "google:vi", "label": "★ Google Tiếng Việt (Nữ — Chuẩn)"})
-            return self._send_json({"rssProxy": True, "cloudVoices": voices})
+            return self._send_json({"rssProxy": True, "articleProxy": True, "cloudVoices": voices})
+
+        if parsed.path == "/api/article":
+            url = (qs.get("url") or [""])[0].strip()
+            if not url.startswith(("http://", "https://")):
+                return self._send_json({"error": "URL không hợp lệ"}, 400)
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36"},
+                )
+                with urllib.request.urlopen(req, timeout=12) as r:
+                    html = r.read().decode("utf-8", errors="ignore")
+                txt = re.sub(r"<(script|style|noscript|svg|iframe|nav|footer|aside|form)[\s\S]*?</\1>", " ", html, flags=re.I)
+                txt = re.sub(r"<[^>]+>", " ", txt)
+                txt = re.sub(r"\s+", " ", txt).strip()[:6500]
+                return self._send_json({"ok": True, "text": txt})
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 502)
 
         if parsed.path == "/api/rss":
             url = (qs.get("url") or [""])[0].strip()

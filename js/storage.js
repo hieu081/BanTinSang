@@ -69,6 +69,7 @@ export const DEFAULT_SETTINGS = {
   geminiKey: '',
   workerUrl: isLocalHost ? '' : 'https://mecha-hub-api.hieuminh0945.workers.dev',
   techOnly: true, // Lọc tin tiêu dùng rác ở nguồn VN tổng hợp
+  saveData4G: false, // Tiết kiệm 4G: chỉ tải mạng khi chủ động bấm nút ↻
   ttsRate: 0.95,
   ttsVoice: '',
 };

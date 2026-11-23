@@ -1,6 +1,7 @@
 // notes.js — Bookmarks (có tìm kiếm nhanh), Lab Log & Sổ tay BOM tính chi phí đồ án + Copy Markdown
-import { store } from './storage.js';
+import { store, getSettings } from './storage.js';
 import { $, $$, esc, timeAgo, fmtDateTime, toast, copyText, num } from './utils.js';
+import { callGemini } from './feeds.js';
 
 export const BM_TAGS = ['#Nhúng', '#CơKhí', '#ĐồÁn', '#Robotics'];
 export const LOG_TAGS = ['#Ý_tưởng', '#Mua_linh_kiện', '#Bug_cần_fix'];
@@ -183,7 +184,10 @@ export function renderLog() {
           <label class="field"><span>Số lượng (SL)</span><input class="input mono" id="log-qty" type="text" inputmode="decimal" value="1" placeholder="1"></label>
           <label class="field"><span>Đơn giá ước tính (₫)</span><input class="input mono" id="log-price" type="text" inputmode="decimal" placeholder="VD: 15000"></label>
         </div>
-        <button class="btn primary block" type="submit">＋ Thêm ${isBomTag ? 'vào BOM' : 'ghi chú'}</button>
+        <div class="btn-row">
+          <button class="btn primary" type="submit">＋ Thêm ${isBomTag ? 'vào BOM' : 'ghi chú'}</button>
+          ${isBomTag && getSettings().geminiKey ? '<button class="btn" type="button" id="bom-ai-gen">🤖 AI lập BOM</button>' : ''}
+        </div>
       </form>
     </div>
     ${bom.total > 0 ? `
@@ -263,6 +267,31 @@ export function init() {
     if (e.target.closest('#log-copy')) {
       const ok = await copyText(logsToMarkdown());
       toast(ok ? 'Đã copy Markdown — dán vào Notion / Obsidian / GitHub' : 'Không copy được');
+      return;
+    }
+    if (e.target.closest('#bom-ai-gen')) {
+      const desc = ($('#log-text')?.value || '').trim();
+      if (!desc) { toast('Nhập mô tả đồ án vào ô trên trước (VD: Xe tự cân bằng STM32)'); $('#log-text')?.focus(); return; }
+      const btn = $('#bom-ai-gen');
+      btn.disabled = true;
+      btn.textContent = '🤖 Đang lập BOM…';
+      try {
+        const prompt = `Lập danh sách 5–8 linh kiện chính cần mua tại Việt Nam cho đồ án Cơ điện tử sau: "${desc}".
+Chỉ trả về JSON mảng thuần túy, KHÔNG markdown, KHÔNG giải thích, theo đúng định dạng:
+[{"name":"Tên linh kiện","qty":1,"price":65000}]`;
+        const raw = await callGemini(getSettings().geminiKey, prompt);
+        const m = raw.match(/\[[\s\S]*\]/);
+        const arr = JSON.parse(m ? m[0] : raw);
+        if (!Array.isArray(arr) || !arr.length) throw new Error('Không phân tích được danh sách BOM');
+        arr.slice(0, 10).forEach((x) => {
+          if (x?.name) addLog(String(x.name), '#Mua_linh_kiện', { qty: Number(x.qty) || 1, price: Number(x.price) || 0 });
+        });
+        toast(`🤖 Đã thêm ${Math.min(10, arr.length)} linh kiện vào BOM!`);
+      } catch (err) {
+        toast(`Lỗi AI BOM: ${err.message}`);
+      } finally {
+        renderLog();
+      }
       return;
     }
     if (e.target.closest('#log-clear-done')) saveLogs(getLogs().filter((l) => !l.done));

@@ -18,6 +18,15 @@ export function render() {
   if (!pane) return;
   const s = getSettings();
   pane.innerHTML = `
+    <!-- Tiết kiệm 4G -->
+    <div class="card settings-group">
+      <div class="card-head"><div class="card-title">📶 Dữ liệu di động</div></div>
+      <div class="switch-row">
+        <div><div>Chế độ Tiết kiệm 4G</div><div class="small muted">Chỉ tải tin & thời tiết khi bạn chủ động bấm nút ↻</div></div>
+        <label class="switch"><input type="checkbox" id="set-4g" ${s.saveData4G ? 'checked' : ''}><span></span></label>
+      </div>
+    </div>
+
     <!-- Vị trí & GPS -->
     <div class="card settings-group">
       <div class="card-head"><div class="card-title">📍 Vị trí & Thời tiết</div><span class="tag mono">${s.location.lat}, ${s.location.lon}</span></div>
@@ -160,6 +169,11 @@ export function init() {
   const pane = $('#pane-settings');
   pane.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.id === 'set-4g') {
+      saveSettings({ saveData4G: t.checked });
+      toast(t.checked ? 'Đã bật chế độ Tiết kiệm 4G' : 'Đã tắt Tiết kiệm 4G');
+      return;
+    }
     if (t.id === 'set-gps') {
       saveSettings({ useGPS: t.checked });
       toast(t.checked ? 'Đã bật ưu tiên GPS' : 'Dùng vị trí mặc định');

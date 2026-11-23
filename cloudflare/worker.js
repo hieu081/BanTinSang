@@ -52,12 +52,40 @@ export default {
       return jsonRes({
         rssProxy: true,
         translateProxy: true,
+        articleProxy: true,
         cloudVoices: [
           { id: 'google:vi', label: '★ Google Tiếng Việt — Chuẩn (Nữ)' },
           { id: 'google:vi-slow', label: '★ Google Tiếng Việt — Đọc chậm, rõ' },
           { id: 'google:vi-fast', label: '★ Google Tiếng Việt — Điểm tin nhanh' },
         ],
       });
+    }
+
+    if (reqUrl.pathname === '/api/article') {
+      const target = (reqUrl.searchParams.get('url') || '').trim();
+      if (!/^https?:\/\//i.test(target)) return jsonRes({ error: 'URL không hợp lệ' }, 400);
+      try {
+        const res = await fetch(target, {
+          redirect: 'follow',
+          headers: { 'User-Agent': CHROME_UA, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8' },
+          cf: { cacheTtl: 600, cacheEverything: true },
+        });
+        const html = await res.text();
+        // Lọc sạch script, style, nav, header, footer để lấy nội dung chính cho AI tóm tắt
+        const cleaned = html
+          .replace(/<(script|style|noscript|svg|iframe|nav|footer|aside|form)[\s\S]*?<\/\1>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/&quot;/gi, '"')
+          .replace(/&#39;/gi, "'")
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 6500);
+        return jsonRes({ ok: true, text: cleaned });
+      } catch (e) {
+        return jsonRes({ error: String(e) }, 502);
+      }
     }
 
     if (reqUrl.pathname === '/api/rss') {

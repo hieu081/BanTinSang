@@ -85,6 +85,9 @@
           <button class="icon-btn" id="tts-next" aria-label="Đoạn tiếp theo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6h-2z"/></svg></button>
           <button class="icon-btn" id="tts-stop" aria-label="Dừng đọc"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
         </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn sm success block" id="tts-podcast-ai" hidden>✨ Podcast AI Sáng nay (Tổng hợp &amp; Đọc hộ)</button>
+        </div>
         <div class="tts-progress"><i id="tts-prog-bar" style="width:0%"></i></div>
         <div class="tts-status" id="tts-status">Lời chào · Telemetry thời tiết · 5 tin ưu tiên (tiếng Việt)</div>
         <div class="tts-controls">
@@ -115,6 +118,9 @@
         <div class="spark-foot">
           <span class="small muted" id="spark-hint">Thẻ của hôm nay</span>
           <div class="btn-row">
+            <button class="btn sm" id="spark-speak">🎧 Nghe thẻ</button>
+            <button class="btn sm" id="spark-speak5">🎧 Nghe 5 thẻ</button>
+            <button class="btn sm" id="spark-ai-ask" hidden>💬 AI Ví dụ</button>
             <button class="btn sm" id="spark-search">🔍 Tra 75 thẻ</button>
             <button class="btn sm" id="spark-today">Hôm nay</button>
             <button class="btn sm primary" id="spark-next">🎲 Thẻ khác</button>
