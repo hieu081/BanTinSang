@@ -285,8 +285,12 @@ function speakCurrent() {
   const audio = new Audio();
   audioEl = audio;
   audio.src = cloudAudioUrl(selectedId, cleanText);
-  // Với Google TTS trực tiếp (không có server chỉnh rate), chỉnh tốc độ bằng playbackRate
-  if (selectedId.startsWith('gtts-direct:') || selectedId.startsWith('google:')) {
+  // Với Google TTS, điều chỉnh playbackRate theo phong cách giọng + tốc độ người dùng chọn
+  if (selectedId === 'google:vi-slow') {
+    audio.playbackRate = Math.max(0.75, rate * 0.88);
+  } else if (selectedId === 'google:vi-fast') {
+    audio.playbackRate = Math.min(1.5, rate * 1.18);
+  } else if (selectedId.startsWith('gtts-direct:') || selectedId.startsWith('google:')) {
     audio.playbackRate = rate;
   }
   audio.onended = () => {

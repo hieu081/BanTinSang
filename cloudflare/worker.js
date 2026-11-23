@@ -1,6 +1,6 @@
 // cloudflare/worker.js — Cloudflare Worker miễn phí (100.000 req/ngày)
-// Dùng làm proxy /api/rss và /api/tts khi mở PWA trên iPhone từ xa (4G/Wi-Fi).
-// Cách deploy: vào https://dash.cloudflare.com -> Workers & Pages -> Create Worker -> dán file này -> Deploy.
+// Dùng làm proxy /api/rss và /api/tts khi mở PWA trên GitHub Pages / iPhone từ xa.
+// Cách cập nhật: vào Cloudflare Dashboard -> Worker mecha-hub-api -> Edit code -> dán đè -> Deploy.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -15,6 +15,34 @@ function jsonRes(obj, status = 200) {
   });
 }
 
+// Cắt đoạn văn bản tiếng Việt dài thành các cụm <= 170 ký tự theo dấu câu để Google TTS đọc trọn vẹn
+function splitChunks(text, maxLen = 170) {
+  const chunks = [];
+  let cur = '';
+  const sentences = text.replace(/;/g, '.').split(/(?<=[.!?])\s+/);
+  for (const s of sentences) {
+    const part = s.trim();
+    if (!part) continue;
+    if ((cur + ' ' + part).trim().length <= maxLen) {
+      cur = (cur ? cur + ' ' : '') + part;
+    } else {
+      if (cur) chunks.push(cur);
+      if (part.length <= maxLen) {
+        cur = part;
+      } else {
+        let buf = '';
+        for (const w of part.split(/\s+/)) {
+          if ((buf + ' ' + w).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + w;
+          else { if (buf) chunks.push(buf); buf = w; }
+        }
+        cur = buf;
+      }
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.slice(0, 6);
+}
+
 export default {
   async fetch(request) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -23,7 +51,11 @@ export default {
     if (reqUrl.pathname === '/api/capabilities') {
       return jsonRes({
         rssProxy: true,
-        cloudVoices: [{ id: 'google:vi', label: '★ Google Tiếng Việt (Cloudfare Audio)' }],
+        cloudVoices: [
+          { id: 'google:vi', label: '★ Google Tiếng Việt — Chuẩn (Nữ)' },
+          { id: 'google:vi-slow', label: '★ Google Tiếng Việt — Đọc chậm, rõ' },
+          { id: 'google:vi-fast', label: '★ Google Tiếng Việt — Điểm tin nhanh' },
+        ],
       });
     }
 
@@ -53,14 +85,22 @@ export default {
     }
 
     if (reqUrl.pathname === '/api/tts') {
-      const text = (reqUrl.searchParams.get('text') || '').trim().slice(0, 190);
+      const text = (reqUrl.searchParams.get('text') || '').trim();
       if (!text) return jsonRes({ error: 'Thiếu text' }, 400);
-      const gUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(text)}`;
+      const chunks = splitChunks(text, 170);
       try {
-        const res = await fetch(gUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        const mp3 = await res.arrayBuffer();
-        return new Response(mp3, {
-          status: res.status,
+        const buffers = await Promise.all(chunks.map(async (c) => {
+          const gUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(c)}`;
+          const r = await fetch(gUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (!r.ok) throw new Error(`TTS HTTP ${r.status}`);
+          return new Uint8Array(await r.arrayBuffer());
+        }));
+        const total = buffers.reduce((s, b) => s + b.length, 0);
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (const b of buffers) { merged.set(b, offset); offset += b.length; }
+        return new Response(merged, {
+          status: 200,
           headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=3600', ...CORS },
         });
       } catch (e) {

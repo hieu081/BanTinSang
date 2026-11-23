@@ -12,10 +12,10 @@ import { SPARKS, dailySparkIndex } from './data/sparks.js';
 /* ---------- Đồng hồ & Lời chào ---------- */
 function greetingInfo(d = new Date()) {
   const h = d.getHours();
-  if (h < 11) return { title: 'Chào buổi sáng, Kỹ sư!', sub: 'Kiểm tra telemetry môi trường & điểm tin Cơ điện tử.' };
-  if (h < 14) return { title: 'Chào buổi trưa!', sub: 'Cập nhật nhanh bản tin kỹ thuật & trạng thái phòng lab.' };
-  if (h < 18) return { title: 'Chào buổi chiều!', sub: 'Tiếp tục dự án — tra cứu nhanh Lab Tools & Radar tin.' };
-  return { title: 'Chào buổi tối!', sub: 'Tổng kết Lab Log & ôn 1 phút kiến thức Cơ điện tử.' };
+  if (h < 11) return { title: 'Chào buổi sáng, Hiếu!', sub: 'Kiểm tra telemetry môi trường & điểm tin Cơ điện tử.' };
+  if (h < 14) return { title: 'Chào buổi trưa, Hiếu!', sub: 'Cập nhật nhanh bản tin kỹ thuật & trạng thái phòng lab.' };
+  if (h < 18) return { title: 'Chào buổi chiều, Hiếu!', sub: 'Tiếp tục dự án — tra cứu nhanh Lab Tools & Radar tin.' };
+  return { title: 'Chào buổi tối, Hiếu!', sub: 'Tổng kết Lab Log & ôn 1 phút kiến thức Cơ điện tử.' };
 }
 
 function updateClock() {
@@ -193,7 +193,7 @@ function buildTTSQueue() {
       });
     });
   }
-  q.push({ text: 'Hết bản tin. Chúc bạn một ngày làm việc và nghiên cứu hiệu quả!', display: 'Kết thúc bản tin', sel: null });
+  q.push({ text: 'Hết bản tin. Chúc Hiếu một ngày làm việc và nghiên cứu hiệu quả!', display: 'Kết thúc bản tin', sel: null });
   return q;
 }
 
