@@ -548,22 +548,41 @@ function markRead(id) {
 const findItem = (id) => items.find((i) => i.id === id);
 
 /* ---------- Gemini BYOK ---------- */
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+
 async function callGemini(key, prompt) {
-  const r = await fetchWithTimeout(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 1500, thinkingConfig: { thinkingBudget: 0 } },
-      }),
-    }, 45000);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error?.message || `HTTP ${r.status}`);
-  const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-  if (!text) throw new Error('Gemini không trả về nội dung');
-  return text;
+  const cleanKey = String(key || '').trim();
+  const errors = [];
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+      const r = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
+        }),
+      }, 35000);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = j.error?.message || `HTTP ${r.status}`;
+        // Nếu chắc chắn sai API key thì dừng luôn, không cần thử model khác
+        if (/API key not valid|API_KEY_INVALID|invalid api key/i.test(msg)) {
+          throw new Error(`API_KEY_INVALID: ${msg}`);
+        }
+        errors.push(`${model}: ${msg}`);
+        continue;
+      }
+      const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+      if (text) return text;
+      errors.push(`${model}: rỗng`);
+    } catch (e) {
+      if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
+      errors.push(`${model}: ${e.message}`);
+    }
+  }
+  throw new Error(errors.join(' | ') || 'Không gọi được Gemini API');
 }
 
 function parseBullets(text) {
@@ -617,8 +636,8 @@ ${top}`;
     store.set('aiSummary', { ts: Date.now(), bullets });
     renderAI();
   } catch (e) {
-    const msg = /API key|API_KEY|permission|403|400/i.test(e.message)
-      ? 'Gemini API Key không hợp lệ — kiểm tra trong Cài đặt.'
+    const msg = /API_KEY_INVALID|API key not valid/i.test(e.message)
+      ? 'Gemini API Key không hợp lệ — hãy kiểm tra lại chuỗi AIzaSy… trong Cài đặt.'
       : `Lỗi AI: ${e.message}`;
     box.innerHTML = `<div class="card-title">✨ AI tóm tắt</div><p class="small" style="color:var(--red)">${esc(msg)}</p>`;
   } finally {

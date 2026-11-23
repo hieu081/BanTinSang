@@ -1,5 +1,5 @@
 // sw.js — Service Worker cache App Shell để chạy 100% offline trên iPhone
-const CACHE_NAME = 'mmh-shell-v9';
+const CACHE_NAME = 'mmh-shell-v10';
 const ASSETS = [
   './',
   './index.html',
