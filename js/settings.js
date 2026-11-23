@@ -142,7 +142,8 @@ export function render() {
         <input type="file" id="import-file" accept=".json,application/json" hidden>
       </div>
       <div class="btn-row" style="margin-top:8px">
-        <button class="btn sm danger" id="btn-clear-cache">Xóa cache tin & thời tiết</button>
+        <button class="btn sm" id="btn-force-update">🔄 Cập nhật bản mới nhất</button>
+        <button class="btn sm danger" id="btn-clear-cache">Xóa cache tin</button>
       </div>
       <p class="hint">Xuất toàn bộ cài đặt, Bookmarks và Lab Log ra tệp <code>.json</code> để không mất dữ liệu khi đổi iPhone hoặc xóa cache Safari.</p>
     </div>
@@ -316,6 +317,21 @@ export function init() {
     }
     if (btn.id === 'btn-import') {
       $('#import-file').click();
+      return;
+    }
+    if (btn.id === 'btn-force-update') {
+      toast('Đang xóa cache cũ & tải bản mới nhất…');
+      try {
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+        if ('serviceWorker' in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+      } catch (_) { /* bỏ qua */ }
+      location.reload();
       return;
     }
     if (btn.id === 'btn-clear-cache') {

@@ -1,5 +1,5 @@
-// sw.js — Service Worker cache App Shell để chạy 100% offline trên iPhone
-const CACHE_NAME = 'mmh-shell-v11';
+// sw.js — Service Worker: Network-First khi có mạng (luôn nhận bản mới trên iPhone), fallback Cache khi offline
+const CACHE_NAME = 'mmh-shell-v12';
 const ASSETS = [
   './',
   './index.html',
@@ -44,15 +44,14 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const network = fetch(req).then((res) => {
+    fetch(req, { cache: 'no-cache' })
+      .then((res) => {
         if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE_NAME).then((c) => c.put(req, copy));
         }
         return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+      })
+      .catch(() => caches.match(req))
   );
 });
