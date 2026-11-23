@@ -227,8 +227,145 @@ export function renderLog() {
     </div>`;
 }
 
+/* ---------- Sổ theo dõi Sửa máy & Bảo hành ---------- */
+const getRepairs = () => store.get('repairs', []);
+const saveRepairs = (l) => { store.set('repairs', l); renderRepairs(); };
+let repFilter = 'all';
+
+function warrantyEndTs(ts, months) {
+  const d = new Date(ts);
+  d.setMonth(d.getMonth() + (months || 0));
+  return d.getTime();
+}
+
+export function renderRepairs() {
+  const pane = $('#pane-repairs');
+  if (!pane) return;
+  const all = getRepairs();
+  const now = Date.now();
+  const list = all.filter((r) => {
+    if (repFilter === 'open') return !r.delivered;
+    if (repFilter === 'warranty') return r.delivered && r.warrantyM > 0 && warrantyEndTs(r.deliveredAt || r.ts, r.warrantyM) > now;
+    return true;
+  });
+  const totalDone = all.filter((r) => r.delivered).reduce((s, r) => s + (r.price || 0), 0);
+  const openN = all.filter((r) => !r.delivered).length;
+
+  pane.innerHTML = `
+    <div class="card">
+      <div class="card-head"><div class="card-title">📋 Nhận / Ghi đơn Sửa máy</div><span class="tag mono">${openN} đang sửa</span></div>
+      <form class="note-input" id="rep-form" autocomplete="off">
+        <input class="input" id="rep-dev" placeholder="Tên máy & Khách (VD: Bếp từ Sunhouse — Anh Hùng)">
+        <textarea class="input" id="rep-desc" rows="2" placeholder="Lỗi gặp phải & Linh kiện đã thay (VD: Nổ IGBT H20R1203 + thay tụ 0.3µF)"></textarea>
+        <div class="grid-2">
+          <label class="field"><span>Giá thu (₫)</span><input class="input mono" id="rep-price" type="text" inputmode="decimal" placeholder="VD: 250000"></label>
+          <label class="field"><span>Bảo hành (tháng)</span>
+            <select class="input mono" id="rep-wm">
+              <option value="0">Không BH</option>
+              <option value="1">1 tháng</option>
+              <option value="3" selected>3 tháng</option>
+              <option value="6">6 tháng</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn primary block" type="submit">＋ Thêm vào sổ sửa máy</button>
+      </form>
+    </div>
+    ${totalDone > 0 ? `
+      <div class="card" style="padding:10px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><div class="tiny muted" style="text-transform:uppercase;letter-spacing:.06em">Tổng thu đã giao</div>
+            <div class="mono" style="font-size:19px;font-weight:700;color:var(--green)">${Math.round(totalDone).toLocaleString('vi-VN')} ₫</div></div>
+          <div style="text-align:right"><div class="tiny muted">Tổng đơn</div>
+            <div class="mono" style="font-size:15px">${all.length} máy</div></div>
+        </div>
+      </div>` : ''}
+    <div class="chip-scroll" style="margin-bottom:8px">
+      <button class="chip${repFilter === 'all' ? ' active' : ''}" data-rf="all">Tất cả <span class="count">${all.length}</span></button>
+      <button class="chip${repFilter === 'open' ? ' active' : ''}" data-rf="open">Đang sửa <span class="count">${openN}</span></button>
+      <button class="chip${repFilter === 'warranty' ? ' active' : ''}" data-rf="warranty">Còn bảo hành</button>
+    </div>
+    <div class="card">
+      ${list.length ? `<ul class="list">${list.map((r) => {
+        const endTs = warrantyEndTs(r.deliveredAt || r.ts, r.warrantyM);
+        const wBadge = !r.delivered
+          ? '<span class="tag amber">Đang sửa</span>'
+          : (r.warrantyM > 0
+            ? (endTs > now ? `<span class="tag green">Còn BH đến ${new Date(endTs).toLocaleDateString('vi-VN')}</span>` : '<span class="tag">Hết BH</span>')
+            : '<span class="tag">Đã giao</span>');
+        return `
+        <li class="list-item${r.delivered ? ' done' : ''}">
+          <button class="check${r.delivered ? ' on' : ''}" data-rdone="${r.id}" aria-label="Đánh dấu đã giao">${CHECK}</button>
+          <div class="body">
+            <div class="title">${esc(r.device)}</div>
+            ${r.desc ? `<div class="small muted" style="margin-top:2px">${esc(r.desc)}</div>` : ''}
+            <div class="meta">
+              ${wBadge}
+              ${r.price ? `<span class="tag cyan mono">${Math.round(r.price).toLocaleString('vi-VN')}₫</span>` : ''}
+              <span class="mono">${esc(fmtDateTime(r.ts))}</span>
+              <button class="btn sm ghost" data-rzalo="${r.id}" style="min-height:26px;padding:0 8px;font-size:11.5px">📤 Copy Zalo</button>
+            </div>
+          </div>
+          <button class="del-btn" data-rdel="${r.id}" aria-label="Xóa đơn">${TRASH}</button>
+        </li>`;
+      }).join('')}</ul>`
+        : '<div class="empty"><span class="big">📋</span>Chưa có đơn sửa máy nào.</div>'}
+    </div>`;
+}
+
+/* ---------- Sổ tay "Pan bệnh đã sửa" (Personal Repair Wiki) ---------- */
+const PAN_CATS = ['Bếp từ', 'Máy hàn', 'Nguồn xung', 'Khác'];
+const getPans = () => store.get('panWiki', []);
+const savePans = (l) => { store.set('panWiki', l); renderPans(); };
+let panCat = 'Bếp từ';
+let panFilter = 'all';
+let panQuery = '';
+
+export function renderPans() {
+  const pane = $('#pane-pans');
+  if (!pane) return;
+  const all = getPans();
+  const q = panQuery.trim().toLowerCase();
+  const list = all.filter((p) => {
+    if (panFilter !== 'all' && p.cat !== panFilter) return false;
+    if (q && !`${p.cat} ${p.symptom} ${p.fix}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  pane.innerHTML = `
+    <div class="card">
+      <div class="card-head"><div class="card-title">📒 Lưu Pan bệnh đã sửa thành công</div><span class="tag mono">${all.length} pan</span></div>
+      <form class="note-input" id="pan-form" autocomplete="off">
+        <div class="seg" id="pan-cats">
+          ${PAN_CATS.map((c) => `<button type="button" data-pcat="${c}" class="${panCat === c ? 'active' : ''}">${c}</button>`).join('')}
+        </div>
+        <input class="input" id="pan-sym" placeholder="Model & Triệu chứng (VD: Bếp Sunhouse SHD6861 báo E0 không nhận nồi)">
+        <textarea class="input" id="pan-fix" rows="2" placeholder="Nguyên nhân & Cách sửa đã thành công (VD: Đứt trở R18 240kΩ đường đồng bộ, thay xong chạy êm)"></textarea>
+        <button class="btn primary block" type="submit">＋ Lưu vào kho Pan bệnh</button>
+      </form>
+    </div>
+    <input class="input" id="pan-search" value="${esc(panQuery)}" placeholder="🔍 Tìm pan cũ (VD: E0, OC, Sunhouse, 240k, D92-02…)" autocomplete="off" style="margin-bottom:8px">
+    <div class="chip-scroll" style="margin-bottom:8px">
+      <button class="chip${panFilter === 'all' ? ' active' : ''}" data-pf="all">Tất cả <span class="count">${all.length}</span></button>
+      ${PAN_CATS.map((c) => `<button class="chip${panFilter === c ? ' active' : ''}" data-pf="${c}">${c} <span class="count">${all.filter((x) => x.cat === c).length}</span></button>`).join('')}
+    </div>
+    <div class="card">
+      ${list.length ? `<ul class="list">${list.map((p) => `
+        <li class="list-item">
+          <div class="body">
+            <div class="title">${esc(p.symptom)}</div>
+            <div style="margin-top:4px;font-size:13.5px;color:var(--green)">✓ ${esc(p.fix)}</div>
+            <div class="meta"><span class="tag cyan">${esc(p.cat)}</span><span class="mono">${esc(fmtDateTime(p.ts))}</span></div>
+          </div>
+          <button class="del-btn" data-pdel="${p.id}" aria-label="Xóa pan">${TRASH}</button>
+        </li>`).join('')}</ul>`
+        : '<div class="empty"><span class="big">📒</span>Chưa có pan bệnh nào. Mỗi lần sửa xong 1 ca khó hãy lưu lại để lần sau xử lý trong 30 giây!</div>'}
+    </div>`;
+}
+
 export function init() {
   renderLog();
+  renderRepairs();
+  renderPans();
   renderBookmarks();
 
   $('#pane-log').addEventListener('submit', (e) => {
@@ -315,5 +452,88 @@ Chỉ trả về JSON mảng thuần túy, KHÔNG markdown, KHÔNG giải thích
       const ok = await copyText(bookmarksToMarkdown());
       toast(ok ? 'Đã copy Markdown danh sách bài' : 'Không copy được');
     }
+  });
+
+  // Sự kiện Sổ Sửa máy & Bảo hành
+  $('#pane-repairs')?.addEventListener('submit', (e) => {
+    if (e.target.id !== 'rep-form') return;
+    e.preventDefault();
+    const device = ($('#rep-dev')?.value || '').trim();
+    const desc = ($('#rep-desc')?.value || '').trim();
+    if (!device) { toast('Nhập tên máy / khách hàng trước'); return; }
+    const price = num($('#rep-price')?.value);
+    const warrantyM = Number($('#rep-wm')?.value || 0);
+    const list = getRepairs();
+    list.unshift({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      device, desc, price: Number.isFinite(price) ? price : 0, warrantyM,
+      delivered: false, ts: Date.now(), deliveredAt: null,
+    });
+    saveRepairs(list);
+    toast('Đã thêm đơn sửa máy');
+  });
+  $('#pane-repairs')?.addEventListener('click', async (e) => {
+    const f = e.target.closest('[data-rf]');
+    if (f) { repFilter = f.dataset.rf; renderRepairs(); return; }
+    const d = e.target.closest('[data-rdone]');
+    if (d) {
+      saveRepairs(getRepairs().map((r) => (r.id === d.dataset.rdone
+        ? { ...r, delivered: !r.delivered, deliveredAt: !r.delivered ? Date.now() : null }
+        : r)));
+      return;
+    }
+    const del = e.target.closest('[data-rdel]');
+    if (del) { saveRepairs(getRepairs().filter((r) => r.id !== del.dataset.rdel)); toast('Đã xóa đơn'); return; }
+    const z = e.target.closest('[data-rzalo]');
+    if (z) {
+      const r = getRepairs().find((x) => x.id === z.dataset.rzalo);
+      if (!r) return;
+      const msg = [
+        `📋 THÔNG BÁO SỬA CHỮA — ${r.device}`,
+        r.desc ? `• Nội dung: ${r.desc}` : '',
+        r.price ? `• Chi phí: ${Math.round(r.price).toLocaleString('vi-VN')} ₫` : '',
+        r.warrantyM ? `• Bảo hành: ${r.warrantyM} tháng (từ ${new Date(r.deliveredAt || Date.now()).toLocaleDateString('vi-VN')})` : '',
+        'Cảm ơn anh/chị đã tin tưởng!',
+      ].filter(Boolean).join('\n');
+      const ok = await copyText(msg);
+      toast(ok ? 'Đã copy phiếu — dán gửi Zalo cho khách!' : 'Không copy được');
+    }
+  });
+
+  // Sự kiện Sổ tay Pan bệnh đã sửa
+  $('#pane-pans')?.addEventListener('submit', (e) => {
+    if (e.target.id !== 'pan-form') return;
+    e.preventDefault();
+    const symptom = ($('#pan-sym')?.value || '').trim();
+    const fix = ($('#pan-fix')?.value || '').trim();
+    if (!symptom || !fix) { toast('Nhập đủ triệu chứng và cách sửa đã thành công'); return; }
+    const list = getPans();
+    list.unshift({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      cat: panCat, symptom, fix, ts: Date.now(),
+    });
+    savePans(list);
+    toast('Đã lưu vào kho Pan bệnh!');
+  });
+  $('#pane-pans')?.addEventListener('input', (e) => {
+    if (e.target.id === 'pan-search') {
+      panQuery = e.target.value;
+      const pos = e.target.selectionStart;
+      renderPans();
+      const inp = $('#pan-search');
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    }
+  });
+  $('#pane-pans')?.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-pcat]');
+    if (c) {
+      panCat = c.dataset.pcat;
+      $$('#pan-cats button').forEach((b) => b.classList.toggle('active', b === c));
+      return;
+    }
+    const f = e.target.closest('[data-pf]');
+    if (f) { panFilter = f.dataset.pf; renderPans(); return; }
+    const del = e.target.closest('[data-pdel]');
+    if (del) { savePans(getPans().filter((p) => p.id !== del.dataset.pdel)); toast('Đã xóa pan bệnh'); }
   });
 }

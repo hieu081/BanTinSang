@@ -1,5 +1,5 @@
 // sw.js — Service Worker: Network-First khi có mạng (luôn nhận bản mới trên iPhone), fallback Cache khi offline
-const CACHE_NAME = 'mmh-shell-v16';
+const CACHE_NAME = 'mmh-shell-v17';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,7 @@ const ASSETS = [
   './js/data/sparks.js',
   './js/data/pinouts.js',
   './js/data/parts.js',
+  './js/data/repair.js',
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',

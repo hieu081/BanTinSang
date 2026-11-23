@@ -4,8 +4,9 @@
 // Pin LiPo/18650, Lọc RC & Timer PWM, Mô-men/RPM/Steps/mm/AWG, Encoder, Khí nén, Tra cứu linh kiện.
 import { BOARDS, CONNECTORS } from './data/pinouts.js';
 import { PARTS } from './data/parts.js';
+import { INDUCTION_ERRORS, WELDER_FAULTS, MULTIMETER_GUIDES } from './data/repair.js';
 import { store, getSettings } from './storage.js';
-import { callGemini } from './feeds.js';
+import { callGemini, callGeminiPro } from './feeds.js';
 import * as tts from './tts.js';
 import { $, $$, esc, num, toast } from './utils.js';
 
@@ -619,6 +620,49 @@ export function init() {
       </div>
     </details>
 
+    <!-- 0c. BẢNG TRA MÃ LỖI BẾP TỪ (E0–E8) & BỆNH MÁY HÀN + AI PRO CHẨN ĐOÁN -->
+    <details class="acc" id="tool-diag">
+      <summary>
+        <span class="ico">🔧</span>
+        <span>Mã lỗi Bếp từ (E0–E8) &amp; Bệnh Máy hàn<span class="sub">Tra Offline tức thì + Chẩn đoán chuyên sâu bằng AI Pro</span></span>
+        <span class="chev">›</span>
+      </summary>
+      <div class="acc-body">
+        <div class="tool-block">
+          <div class="seg" id="diag-seg" style="margin-bottom:10px">
+            <button data-dtab="induction" class="active">🍳 Bếp từ (E0–E8)</button>
+            <button data-dtab="welder">⚡ Máy hàn điện tử</button>
+          </div>
+          <div class="chips" id="diag-chips" style="margin-bottom:8px"></div>
+          <div id="diag-offline"></div>
+        </div>
+        <div class="tool-block">
+          <h4>🧠 AI Pro Chẩn đoán Pan bệnh (Chính xác cao)</h4>
+          <textarea class="input" id="diag-q" rows="2" placeholder="VD: Bếp từ Sunhouse SHD6861 bật lên kêu tít tít báo E0 không nhận nồi, đã đo tụ 5µF còn 4.8µF…"></textarea>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn primary" id="diag-ai-btn">🧠 Chẩn đoán bằng AI Pro</button>
+            <button class="btn" id="diag-ai-speak" hidden>🔊 Nghe hướng dẫn đo</button>
+          </div>
+          <div class="result" id="diag-ai-out" style="font-family:var(--font);font-size:13.5px;line-height:1.55" hidden></div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 0d. HƯỚNG DẪN ĐO SỐNG / CHẾT LINH KIỆN (ĐỒNG HỒ SỐ + ĐỒNG HỒ KIM) -->
+    <details class="acc" id="tool-dmm">
+      <summary>
+        <span class="ico">🧲</span>
+        <span>Cách đo Sống / Chết linh kiện (Số &amp; Kim)<span class="sub">IGBT · MOSFET · BJT · Cầu Diode · D92-02 · PC817 · Tụ</span></span>
+        <span class="chev">›</span>
+      </summary>
+      <div class="acc-body">
+        <div class="chip-scroll" id="dmm-chips" style="margin-bottom:8px">
+          ${MULTIMETER_GUIDES.map((g, i) => `<button class="chip${i === 0 ? ' active' : ''}" data-dmm="${i}">${esc(g.name.split('(')[0].trim())}</button>`).join('')}
+        </div>
+        <div id="dmm-body"></div>
+      </div>
+    </details>
+
     <!-- 1. SƠ ĐỒ CHÂN TƯƠNG TÁC -->
     <details class="acc" open id="tool-pinout">
       <summary>
@@ -1074,6 +1118,8 @@ export function init() {
 
   bindVision();
   bindPartsLookup();
+  bindDiagTool();
+  bindMultimeterGuide();
   bindPinout();
   bindResistorColor();
   bindCalcs();
@@ -1234,6 +1280,113 @@ Tra cứu chính xác linh kiện mã "${code}". Chỉ trả về JSON thuần t
   inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); lookupOnline(); } });
   aiBtn.addEventListener('click', () => lookupOnline());
   $$('[data-pq]').forEach((b) => b.addEventListener('click', () => { inp.value = b.dataset.pq; render(); }));
+  render();
+}
+
+/* ---------- Bảng tra Mã lỗi Bếp từ / Máy hàn + AI Pro Chẩn đoán ---------- */
+function bindDiagTool() {
+  let dtab = 'induction';
+  let selIdx = 0;
+  let lastAiText = '';
+
+  const renderOffline = () => {
+    const list = dtab === 'induction' ? INDUCTION_ERRORS : WELDER_FAULTS;
+    if (selIdx >= list.length) selIdx = 0;
+    $('#diag-chips').innerHTML = list.map((x, i) =>
+      `<button class="chip${i === selIdx ? ' active' : ''}" data-didx="${i}">${esc(x.code)}</button>`).join('');
+    const cur = list[selIdx];
+    $('#diag-offline').innerHTML = `
+      <div class="result" style="font-family:var(--font);font-size:13.5px;line-height:1.5">
+        <div style="font-weight:700;color:var(--cyan);font-size:15px">${esc(cur.code)} — ${esc(cur.title)}</div>
+        <p style="margin:6px 0;color:var(--amber)"><b>Nguyên nhân chính:</b> ${esc(cur.cause)}</p>
+        <div style="font-weight:700;color:var(--green);margin-top:8px">Thứ tự đo kiểm tra chuẩn:</div>
+        <ol style="margin:4px 0 0;padding-left:18px">${cur.check.map((c) => `<li style="margin:4px 0">${esc(c)}</li>`).join('')}</ol>
+      </div>`;
+  };
+
+  $('#diag-seg').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dtab]');
+    if (!b) return;
+    dtab = b.dataset.dtab;
+    selIdx = 0;
+    $$('#diag-seg button').forEach((x) => x.classList.toggle('active', x === b));
+    renderOffline();
+  });
+  $('#diag-chips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-didx]');
+    if (!b) return;
+    selIdx = Number(b.dataset.didx);
+    renderOffline();
+  });
+
+  const aiBtn = $('#diag-ai-btn');
+  const spkBtn = $('#diag-ai-speak');
+  const aiOut = $('#diag-ai-out');
+
+  aiBtn.addEventListener('click', async () => {
+    const q = ($('#diag-q')?.value || '').trim();
+    if (!q) { toast('Nhập triệu chứng máy/lỗi cần chẩn đoán trước'); $('#diag-q')?.focus(); return; }
+    const key = getSettings().geminiKey;
+    if (!key) { toast('Hãy nhập Gemini API Key trong Tab 4 → Cài đặt'); return; }
+    aiBtn.disabled = true;
+    spkBtn.hidden = true;
+    aiOut.hidden = false;
+    aiOut.innerHTML = '<div class="skel skel-line"></div><div class="skel skel-line" style="width:85%"></div><div class="skel skel-line" style="width:70%"></div>';
+    try {
+      const prompt = `Bạn là chuyên gia sửa chữa điện tử công suất (Bếp từ, Máy hàn điện tử ARC/TIG/MIG, Nguồn xung SMPS) có 20 năm kinh nghiệm, đang hướng dẫn kỹ thuật cho Hiếu.
+Yêu cầu độ chính xác kỹ thuật CAO NHẤT, không đoán mò chung chung, trình bày súc tích không dùng dấu **:
+1) Khoanh vùng 2–3 nguyên nhân khả nghi nhất (xếp theo xác suất từ cao xuống thấp).
+2) Trình tự đo kiểm tra thực tế bằng Đồng hồ vạn năng (nêu rõ ĐO NGUỘI trước, ĐO NÓNG sau, giá trị điện áp/điện trở chuẩn cần thấy là bao nhiêu).
+3) Lưu ý an toàn bắt buộc (xả tụ 310V, thử qua bóng đèn nối tiếp...) để tránh nổ linh kiện mới.
+
+PAN BỆNH CẦN CHẨN ĐOÁN:
+${q}`;
+      const { text, model } = await callGeminiPro(key, prompt);
+      lastAiText = text.replace(/\*\*/g, '').trim();
+      aiOut.innerHTML = `<div style="margin-bottom:6px"><span class="tag green">🧠 Model: ${esc(model)}</span></div><div style="white-space:pre-wrap">${esc(lastAiText)}</div>`;
+      spkBtn.hidden = false;
+    } catch (e) {
+      aiOut.innerHTML = `<span class="err">Lỗi AI Pro: ${esc(e.message)}</span>`;
+    } finally {
+      aiBtn.disabled = false;
+    }
+  });
+
+  spkBtn.addEventListener('click', () => {
+    if (!lastAiText) return;
+    tts.playCustom([{ text: lastAiText, display: 'AI Pro chẩn đoán pan bệnh', sel: '#tool-diag' }]);
+    toast('🎙️ Đang đọc hướng dẫn đo kiểm tra…');
+  });
+
+  renderOffline();
+}
+
+/* ---------- Hướng dẫn đo Sống/Chết bằng Đồng hồ Số & Đồng hồ Kim ---------- */
+function bindMultimeterGuide() {
+  let idx = 0;
+  const render = () => {
+    const g = MULTIMETER_GUIDES[idx];
+    $$('#dmm-chips button').forEach((b, i) => b.classList.toggle('active', i === idx));
+    $('#dmm-body').innerHTML = `
+      <div class="result" style="font-family:var(--font);font-size:13.5px;line-height:1.5">
+        <div style="font-weight:700;color:var(--text-strong);font-size:15px">${esc(g.name)}</div>
+        <div class="mono small" style="color:var(--cyan);margin:4px 0 10px">${esc(g.pinout)}</div>
+        <div style="padding:8px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border);margin-bottom:8px">
+          <div style="font-weight:700;color:var(--green);margin-bottom:4px">📟 Đồng hồ Số (DMM)</div>
+          <ul style="margin:0;padding-left:18px">${g.digital.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('')}</ul>
+        </div>
+        <div style="padding:8px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border)">
+          <div style="font-weight:700;color:var(--amber);margin-bottom:4px">🧭 Đồng hồ Kim (VOM)</div>
+          <ul style="margin:0;padding-left:18px">${g.analog.map((s) => `<li style="margin:4px 0">${esc(s)}</li>`).join('')}</ul>
+        </div>
+      </div>`;
+  };
+  $('#dmm-chips').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dmm]');
+    if (!b) return;
+    idx = Number(b.dataset.dmm);
+    render();
+  });
   render();
 }
 

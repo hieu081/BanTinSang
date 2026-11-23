@@ -552,6 +552,7 @@ const findItem = (id) => items.find((i) => i.id === id);
 
 /* ---------- Gemini BYOK ---------- */
 const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+const GEMINI_PRO_MODELS = ['gemini-3.8-pro', 'gemini-3.5-pro', 'gemini-2.5-pro', 'gemini-3.8-flash'];
 
 async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
@@ -580,11 +581,11 @@ async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
   return text;
 }
 
-async function discoverFlashModels(cleanKey) {
+async function discoverModels(cleanKey, pattern = /flash/i) {
   try {
     const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {}, 10000);
     return (j.models || [])
-      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent') && /flash/i.test(m.name))
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent') && pattern.test(m.name))
       .map((m) => m.name.replace(/^models\//, ''))
       .reverse();
   } catch (_) {
@@ -611,11 +612,39 @@ export async function callGemini(key, prompt, inlineImage = null) {
   };
   const first = await runList(GEMINI_MODELS);
   if (first) return first;
-  // Dự phòng: tự dò model Flash mới nhất từ tài khoản Google AI Studio
-  const dynamic = await discoverFlashModels(cleanKey);
+  const dynamic = await discoverModels(cleanKey, /flash/i);
   const second = await runList(dynamic.slice(0, 3));
   if (second) return second;
   throw new Error(errors.join(' | ') || 'Không gọi được Gemini API');
+}
+
+/** Gọi model Gemini MẠNH NHẤT (ưu tiên dòng Pro cho chẩn đoán kỹ thuật chuyên sâu, tự dò Pro mới nhất) */
+export async function callGeminiPro(key, prompt, inlineImage = null) {
+  const cleanKey = String(key || '').trim();
+  const tried = new Set();
+  const errors = [];
+  const runList = async (models) => {
+    for (const model of models) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      try {
+        const text = await tryGeminiModel(model, cleanKey, prompt, inlineImage);
+        return { text, model };
+      } catch (e) {
+        if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
+        errors.push(`${model}: ${e.message}`);
+      }
+    }
+    return null;
+  };
+  // Tự dò các model Pro khả dụng của tài khoản trước, kết hợp danh sách ưu tiên
+  const proDiscovered = await discoverModels(cleanKey, /pro/i);
+  const first = await runList([...proDiscovered.slice(0, 3), ...GEMINI_PRO_MODELS]);
+  if (first) return first;
+  const flashDiscovered = await discoverModels(cleanKey, /flash/i);
+  const second = await runList(flashDiscovered.slice(0, 3));
+  if (second) return second;
+  throw new Error(errors.join(' | ') || 'Không gọi được Gemini Pro API');
 }
 
 function parseBullets(text) {
