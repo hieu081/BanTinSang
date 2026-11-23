@@ -22,7 +22,7 @@ let inflight = null;
 
 /* ---------- Nguồn tin ---------- */
 export const gnewsUrl = (terms) =>
-  `https://news.google.com/rss/search?q=${encodeURIComponent(`${terms.join(' OR ')} when:3d`)}&hl=vi&gl=VN&ceid=VN:vi`;
+  `https://news.google.com/rss/search?q=${encodeURIComponent(`${terms.slice(0, 4).join(' OR ')} when:7d`)}&hl=vi&gl=VN&ceid=VN:vi`;
 
 function buildSources(s = getSettings()) {
   const list = s.feeds.filter((f) => f.enabled !== false && f.url).map((f) => ({ ...f, kind: 'rss' }));
@@ -234,8 +234,15 @@ export async function translateEnToVi(text) {
     saved.push(m);
     return `ZZX${idx}ZZ`;
   });
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=${encodeURIComponent(shielded)}`;
-  const data = await fetchJSON(url, {}, 7000);
+  const directUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=${encodeURIComponent(shielded)}`;
+  const base = apiBase();
+  let data;
+  try {
+    data = await fetchJSON(directUrl, {}, 7000);
+  } catch (e) {
+    if (base) data = await fetchJSON(`${base}/api/translate?q=${encodeURIComponent(shielded)}`, {}, 8000);
+    else throw e;
+  }
   let out = Array.isArray(data?.[0]) ? data[0].map((seg) => seg[0] || '').join('') : text;
   out = out.replace(/ZZX\s*(\d+)\s*ZZ/gi, (_, i) => saved[Number(i)] ?? '');
   for (const [re, rep] of POST_FIXES) out = out.replace(re, rep);
@@ -244,7 +251,7 @@ export async function translateEnToVi(text) {
 
 async function translateVisibleBatch(list) {
   if (!navigator.onLine) return;
-  const targets = list.filter((it) => it.lang === 'en' && !trCache[it.id] && !trPending.has(it.id)).slice(0, 14);
+  const targets = list.filter((it) => it.lang === 'en' && !trCache[it.id] && !trPending.has(it.id)).slice(0, 24);
   if (!targets.length) return;
 
   targets.forEach((it) => trPending.add(it.id));
@@ -482,7 +489,9 @@ export function render(triggerTranslate = true) {
   tts.refreshHighlight();
 
   if (triggerTranslate) {
-    const needTr = [...topHeadlines(5), ...shown.slice(0, 12)];
+    // Luôn lọc riêng các bài tiếng Anh để không bị danh sách tin tiếng Việt ở đầu che mất
+    const enItems = shown.filter((i) => i.lang === 'en').slice(0, 24);
+    const needTr = [...topHeadlines(5), ...enItems];
     translateVisibleBatch(needTr);
   }
 }

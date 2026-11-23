@@ -56,11 +56,15 @@ function renderSpark(isDaily = true) {
   const sp = SPARKS[sparkIdx];
   $('#spark-index').textContent = `#${sp.id}/${SPARKS.length}`;
   $('#spark-hint').textContent = isDaily ? 'Thẻ cố định hôm nay · 100% Offline' : 'Thẻ ôn ngẫu nhiên · 100% Offline';
+  const advBadge = sp.level === 'advanced' ? ' <span class="tag amber">🔥 Nâng cao</span>' : '';
   $('#spark-body').innerHTML = `
-    <span class="tag cyan spark-group">${esc(sp.group)}</span>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <span class="tag cyan spark-group">${esc(sp.group)}</span>${advBadge}
+    </div>
     <div class="spark-title">${esc(sp.title)}</div>
     <p class="spark-body">${esc(sp.body)}</p>
     ${sp.formula ? `<div class="spark-formula">${esc(sp.formula)}</div>` : ''}
+    ${sp.detail ? `<div class="result" style="margin-top:8px;font-family:var(--font);font-size:13.5px;line-height:1.5"><b style="color:var(--cyan);display:block;margin-bottom:3px;font-size:12px;text-transform:uppercase;letter-spacing:.04em">📌 Chi tiết & Thực chiến</b>${esc(sp.detail)}</div>` : ''}
     ${sp.tip ? `<div class="spark-tip">💡 ${esc(sp.tip)}</div>` : ''}`;
 }
 
@@ -78,7 +82,7 @@ function openSparkSearch() {
   const renderList = (q = '') => {
     const s = q.trim().toLowerCase();
     const list = s
-      ? SPARKS.filter((x) => `${x.title} ${x.group} ${x.body} ${x.formula || ''}`.toLowerCase().includes(s))
+      ? SPARKS.filter((x) => `${x.title} ${x.group} ${x.body} ${x.detail || ''} ${x.formula || ''}`.toLowerCase().includes(s))
       : SPARKS;
     const box = wrap.querySelector('#sp-res');
     box.innerHTML = list.length
@@ -86,7 +90,7 @@ function openSparkSearch() {
           <li class="list-item" style="cursor:pointer" data-pick-sp="${sp.id}">
             <div class="body">
               <div class="title">#${sp.id} · ${esc(sp.title)}</div>
-              <div class="meta"><span class="tag cyan">${esc(sp.group)}</span></div>
+              <div class="meta"><span class="tag cyan">${esc(sp.group)}</span>${sp.level === 'advanced' ? '<span class="tag amber">🔥 Nâng cao</span>' : ''}</div>
             </div>
           </li>`).join('')}</ul>`
       : '<div class="empty">Không tìm thấy thẻ nào khớp.</div>';

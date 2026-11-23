@@ -1,12 +1,14 @@
 // cloudflare/worker.js — Cloudflare Worker miễn phí (100.000 req/ngày)
-// Dùng làm proxy /api/rss và /api/tts khi mở PWA trên GitHub Pages / iPhone từ xa.
-// Cách cập nhật: vào Cloudflare Dashboard -> Worker mecha-hub-api -> Edit code -> dán đè -> Deploy.
+// Endpoint: /api/capabilities, /api/rss?url=..., /api/tts?text=..., /api/translate?q=...
+// Cập nhật trên Cloudflare: Workers -> mecha-hub-api -> Edit code -> dán toàn bộ file này -> Deploy.
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
+
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
 function jsonRes(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -15,7 +17,6 @@ function jsonRes(obj, status = 200) {
   });
 }
 
-// Cắt đoạn văn bản tiếng Việt dài thành các cụm <= 170 ký tự theo dấu câu để Google TTS đọc trọn vẹn
 function splitChunks(text, maxLen = 170) {
   const chunks = [];
   let cur = '';
@@ -27,9 +28,8 @@ function splitChunks(text, maxLen = 170) {
       cur = (cur ? cur + ' ' : '') + part;
     } else {
       if (cur) chunks.push(cur);
-      if (part.length <= maxLen) {
-        cur = part;
-      } else {
+      if (part.length <= maxLen) cur = part;
+      else {
         let buf = '';
         for (const w of part.split(/\s+/)) {
           if ((buf + ' ' + w).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + w;
@@ -51,6 +51,7 @@ export default {
     if (reqUrl.pathname === '/api/capabilities') {
       return jsonRes({
         rssProxy: true,
+        translateProxy: true,
         cloudVoices: [
           { id: 'google:vi', label: '★ Google Tiếng Việt — Chuẩn (Nữ)' },
           { id: 'google:vi-slow', label: '★ Google Tiếng Việt — Đọc chậm, rõ' },
@@ -64,9 +65,11 @@ export default {
       if (!/^https?:\/\//i.test(target)) return jsonRes({ error: 'URL không hợp lệ' }, 400);
       try {
         const res = await fetch(target, {
+          redirect: 'follow',
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; MechatronicsMorningHub/1.0)',
-            Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+            'User-Agent': CHROME_UA,
+            'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*;q=0.8',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
           },
           cf: { cacheTtl: 300, cacheEverything: true },
         });
@@ -84,6 +87,22 @@ export default {
       }
     }
 
+    if (reqUrl.pathname === '/api/translate') {
+      const q = (reqUrl.searchParams.get('q') || '').trim();
+      if (!q) return jsonRes({ error: 'Thiếu nội dung q' }, 400);
+      const tUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=${encodeURIComponent(q)}`;
+      try {
+        const res = await fetch(tUrl, { headers: { 'User-Agent': CHROME_UA } });
+        const body = await res.text();
+        return new Response(body, {
+          status: res.status,
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=86400', ...CORS },
+        });
+      } catch (e) {
+        return jsonRes({ error: String(e) }, 502);
+      }
+    }
+
     if (reqUrl.pathname === '/api/tts') {
       const text = (reqUrl.searchParams.get('text') || '').trim();
       if (!text) return jsonRes({ error: 'Thiếu text' }, 400);
@@ -91,7 +110,7 @@ export default {
       try {
         const buffers = await Promise.all(chunks.map(async (c) => {
           const gUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=vi&client=tw-ob&q=${encodeURIComponent(c)}`;
-          const r = await fetch(gUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          const r = await fetch(gUrl, { headers: { 'User-Agent': CHROME_UA } });
           if (!r.ok) throw new Error(`TTS HTTP ${r.status}`);
           return new Uint8Array(await r.arrayBuffer());
         }));
@@ -108,6 +127,6 @@ export default {
       }
     }
 
-    return jsonRes({ ok: true, service: 'Mechatronics Morning Hub Worker', endpoints: ['/api/capabilities', '/api/rss?url=...', '/api/tts?text=...'] });
+    return jsonRes({ ok: true, service: 'Mechatronics Morning Hub Worker', endpoints: ['/api/capabilities', '/api/rss', '/api/tts', '/api/translate'] });
   },
 };
