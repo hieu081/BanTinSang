@@ -54,6 +54,8 @@ export const DEFAULT_FEEDS = [
   { id: 'arxiv-ro', name: 'arXiv cs.RO', url: 'https://rss.arxiv.org/rss/cs.RO', group: 'robotics', lang: 'en', enabled: true },
 ];
 
+const isLocalHost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1)$/i.test(location.hostname);
+
 export const DEFAULT_SETTINGS = {
   location: DEFAULT_LOCATION,
   useGPS: true,
@@ -65,7 +67,7 @@ export const DEFAULT_SETTINGS = {
   githubTopics: ['esp32', 'stm32', 'ros2', 'robotics', 'embedded'],
   theme: 'dark', // dark | light | system
   geminiKey: '',
-  workerUrl: '', // URL Cloudflare Worker miễn phí (tùy chọn cho iPhone dùng từ xa)
+  workerUrl: isLocalHost ? '' : 'https://mecha-hub-api.hieuminh0945.workers.dev',
   techOnly: true, // Lọc tin tiêu dùng rác ở nguồn VN tổng hợp
   ttsRate: 0.95,
   ttsVoice: '',
