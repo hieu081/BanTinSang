@@ -18,7 +18,31 @@ let localVoices = []; // Web Speech SpeechSynthesisVoice[]
 let selectedId = '';
 let buildQueue = () => [];
 let currentSel = null;
-let audioEl = null;
+
+// Dùng DUY NHẤT 1 thẻ <audio> cố định để iOS Safari cho phép phát xuyên suốt khi khóa màn hình
+let sharedAudio = null;
+const blobCache = new Map(); // url -> objectURL đã tải sẵn trong RAM
+
+function getAudio() {
+  if (!sharedAudio) {
+    sharedAudio = document.createElement('audio');
+    sharedAudio.setAttribute('playsinline', '');
+    sharedAudio.preload = 'auto';
+  }
+  return sharedAudio;
+}
+
+function preloadAudio(url) {
+  if (!url || blobCache.has(url) || url.includes('translate.google.com')) return;
+  blobCache.set(url, null); // đánh dấu đang tải
+  fetch(url)
+    .then((r) => (r.ok ? r.blob() : null))
+    .then((b) => {
+      if (b && b.size > 0) blobCache.set(url, URL.createObjectURL(b));
+      else blobCache.delete(url);
+    })
+    .catch(() => { blobCache.delete(url); });
+}
 
 /* ---------- Chuẩn hóa phát âm tiếng Việt tự nhiên ---------- */
 const PRONOUNCE_MAP = [
@@ -223,14 +247,14 @@ function setUI() {
   updateMediaSession(queue[idx]);
 }
 
-/* ---------- Phát âm thanh (Cloud MP3 hoặc Web Speech) ---------- */
+/* ---------- Phát âm thanh (Cloud MP3 trên 1 thẻ <audio> duy nhất hoặc Web Speech) ---------- */
 function stopActiveAudio() {
-  if (audioEl) {
-    audioEl.onended = null;
-    audioEl.onerror = null;
-    audioEl.pause();
-    audioEl.src = '';
-    audioEl = null;
+  if (sharedAudio) {
+    sharedAudio.onended = null;
+    sharedAudio.onerror = null;
+    sharedAudio.pause();
+    sharedAudio.removeAttribute('src');
+    sharedAudio.load();
   }
   if (synth) synth.cancel();
 }
@@ -268,7 +292,7 @@ function speakLocal(cleanText, my) {
 
 function speakCurrent() {
   const my = ++token;
-  stopActiveAudio();
+  if (synth) synth.cancel();
   const seg = queue[idx];
   if (!seg) { stop(); return; }
   highlight(seg.sel);
@@ -278,13 +302,18 @@ function speakCurrent() {
   const isCloud = !selectedId.startsWith('local:') && navigator.onLine;
 
   if (!isCloud) {
+    if (sharedAudio) { sharedAudio.onended = null; sharedAudio.pause(); }
     speakLocal(cleanText, my);
     return;
   }
 
-  const audio = new Audio();
-  audioEl = audio;
-  audio.src = cloudAudioUrl(selectedId, cleanText);
+  const audio = getAudio();
+  const rawUrl = cloudAudioUrl(selectedId, cleanText);
+  const cachedBlob = blobCache.get(rawUrl);
+  audio.onended = null;
+  audio.onerror = null;
+  audio.src = cachedBlob || rawUrl;
+
   // Với Google TTS, điều chỉnh playbackRate theo phong cách giọng + tốc độ người dùng chọn
   if (selectedId === 'google:vi-slow') {
     audio.playbackRate = Math.max(0.75, rate * 0.88);
@@ -292,25 +321,30 @@ function speakCurrent() {
     audio.playbackRate = Math.min(1.5, rate * 1.18);
   } else if (selectedId.startsWith('gtts-direct:') || selectedId.startsWith('google:')) {
     audio.playbackRate = rate;
+  } else {
+    audio.playbackRate = 1.0;
   }
+
+  // QUAN TRỌNG cho iOS khi tắt màn hình: chuyển đoạn & play() NGAY LẬP TỨC trong onended, không dùng setTimeout!
   audio.onended = () => {
     if (my !== token) return;
     idx++;
-    setTimeout(() => { if (my === token) speakCurrent(); }, 240);
+    speakCurrent();
   };
   audio.onerror = () => {
     if (my !== token) return;
-    // Nếu Cloud lỗi (mất mạng / chặn), tự fallback sang giọng thiết bị không làm đứt bản tin
     speakLocal(cleanText, my);
   };
   audio.play().catch(() => {
     if (my === token) speakLocal(cleanText, my);
   });
 
-  // Preload nhẹ câu kế tiếp nếu dùng server.py để chuyển câu tức thì không khựng
-  if (queue[idx + 1] && !selectedId.startsWith('gtts-direct:')) {
-    const nextText = normalizeForViSpeech(queue[idx + 1].text);
-    fetch(cloudAudioUrl(selectedId, nextText)).catch(() => {});
+  // Preload sẵn 2 đoạn tiếp theo thành Blob URL để iPhone chuyển câu tức thì 0ms kể cả khi đang khóa màn hình
+  for (let offset = 1; offset <= 2; offset++) {
+    const nxt = queue[idx + offset];
+    if (nxt && !selectedId.startsWith('gtts-direct:')) {
+      preloadAudio(cloudAudioUrl(selectedId, normalizeForViSpeech(nxt.text)));
+    }
   }
 }
 
@@ -328,16 +362,16 @@ export function play() {
   if (!playing) { start(buildQueue()); return; }
   if (paused) {
     paused = false;
-    if (audioEl && audioEl.paused && audioEl.src) {
-      audioEl.play().catch(() => speakCurrent());
+    if (sharedAudio && sharedAudio.paused && sharedAudio.src) {
+      sharedAudio.play().catch(() => speakCurrent());
       setUI();
     } else {
       speakCurrent();
     }
   } else {
     paused = true;
-    if (audioEl && !audioEl.paused) {
-      audioEl.pause();
+    if (sharedAudio && !sharedAudio.paused) {
+      sharedAudio.pause();
     } else {
       token++;
       if (synth) synth.cancel();
