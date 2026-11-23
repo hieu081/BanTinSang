@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mechatronics Morning Hub</title>
+  <meta name="description" content="Bản tin buổi sáng cho kỹ sư Cơ điện tử: telemetry thời tiết, cảnh báo ẩm linh kiện, tỷ giá USD/CNY, tin kỹ thuật, Lab Tools offline.">
+  <meta name="theme-color" content="#090D16">
+  <meta name="color-scheme" content="dark light">
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mecha Hub">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    // Áp theme trước khi render để tránh nháy màn hình
+    (function () {
+      try {
+        var s = JSON.parse(localStorage.getItem('mmh:settings') || '{}');
+        var t = s.theme || 'dark';
+        if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-title">Mechatronics <b>Morning Hub</b></div>
+      <div class="brand-sub" id="clock">--</div>
+    </div>
+    <div class="status-pill" id="sync-pill" title="Trạng thái đồng bộ">
+      <i class="led" id="sync-led"></i><span id="sync-label">Khởi động</span>
+    </div>
+    <button class="icon-btn" id="refresh-btn" aria-label="Làm mới dữ liệu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <!-- ===================== TAB 1: SÁNG NAY ===================== -->
+    <section class="tab active" id="tab-today" data-tab="today" aria-label="Sáng nay">
+      <div class="greet" id="greet">
+        <h1 id="greet-title">Xin chào</h1>
+        <p id="greet-sub">Bản tin kỹ thuật buổi sáng</p>
+      </div>
+
+      <div class="card" id="wx-card">
+        <div class="card-head">
+          <div class="card-title">🛰️ Telemetry môi trường</div>
+          <span class="tag" id="wx-src">Open-Meteo</span>
+        </div>
+        <div id="wx-body">
+          <div class="skel skel-big"></div>
+          <div class="skel skel-line" style="width:70%"></div>
+          <div class="skel skel-line" style="width:45%"></div>
+          <div class="metric-grid">
+            <div class="skel" style="height:54px"></div><div class="skel" style="height:54px"></div><div class="skel" style="height:54px"></div>
+            <div class="skel" style="height:54px"></div><div class="skel" style="height:54px"></div><div class="skel" style="height:54px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="hum-card">
+        <div class="card-head"><div class="card-title">💧 Bảo quản linh kiện & nhựa in 3D</div></div>
+        <div id="hum-body"><div class="skel skel-line" style="width:80%"></div><div class="skel skel-line" style="width:60%"></div></div>
+      </div>
+
+      <div class="card" id="tts-card">
+        <div class="card-head">
+          <div class="card-title">🎙️ Bản tin âm thanh</div>
+          <span class="tag cyan" id="tts-badge">Sẵn sàng</span>
+        </div>
+        <div class="tts-bar">
+          <button class="btn primary tts-play" id="tts-play">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>Phát bản tin</span>
+          </button>
+          <button class="icon-btn" id="tts-prev" aria-label="Đoạn trước"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+          <button class="icon-btn" id="tts-next" aria-label="Đoạn tiếp theo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6h-2z"/></svg></button>
+          <button class="icon-btn" id="tts-stop" aria-label="Dừng đọc"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+        </div>
+        <div class="tts-progress"><i id="tts-prog-bar" style="width:0%"></i></div>
+        <div class="tts-status" id="tts-status">Lời chào · Telemetry thời tiết · 5 tin ưu tiên (tiếng Việt)</div>
+        <div class="tts-controls">
+          <select class="input sm-select" id="tts-voice-select" aria-label="Chọn giọng đọc tiếng Việt"></select>
+          <button class="btn sm tts-rate" id="tts-rate" aria-label="Tốc độ đọc">0.95x</button>
+        </div>
+        <div class="tts-tip">💡 Trên iPhone: vào <b>Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói → Tiếng Việt</b> và tải giọng <b>Linh (Nâng cao)</b> để nghe tự nhiên nhất.</div>
+      </div>
+
+      <div class="card" id="today-news-card">
+        <div class="card-head">
+          <div class="card-title">📡 5 tin ưu tiên</div>
+          <button class="btn sm ghost" data-goto="news">Xem tất cả →</button>
+        </div>
+        <ol class="hl-list" id="today-news">
+          <li><div class="hl-body"><div class="skel skel-line"></div><div class="skel skel-line" style="width:40%"></div></div></li>
+          <li><div class="hl-body"><div class="skel skel-line"></div><div class="skel skel-line" style="width:50%"></div></div></li>
+          <li><div class="hl-body"><div class="skel skel-line"></div><div class="skel skel-line" style="width:35%"></div></div></li>
+        </ol>
+      </div>
+
+      <div class="card" id="spark-card">
+        <div class="card-head">
+          <div class="card-title">⚡ 1 phút ôn kỹ thuật</div>
+          <span class="tag mono" id="spark-index">#--</span>
+        </div>
+        <div id="spark-body"></div>
+        <div class="spark-foot">
+          <span class="small muted" id="spark-hint">Thẻ của hôm nay</span>
+          <div class="btn-row">
+            <button class="btn sm" id="spark-search">🔍 Tra 55 thẻ</button>
+            <button class="btn sm" id="spark-today">Hôm nay</button>
+            <button class="btn sm primary" id="spark-next">🎲 Thẻ khác</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TAB 2: TIN KỸ THUẬT ===================== -->
+    <section class="tab" id="tab-news" data-tab="news" aria-label="Tin kỹ thuật">
+      <div class="news-toolbar">
+        <div class="chip-scroll" id="news-filters"></div>
+      </div>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn sm primary" id="news-tech-only">⚙ Kỹ thuật thuần: BẬT</button>
+        <button class="btn sm" id="news-refresh">↻ Tải lại</button>
+        <button class="btn sm primary" id="ai-btn" hidden>✨ AI Tóm tắt</button>
+      </div>
+      <div class="card ai-box" id="ai-box" hidden></div>
+      <div id="news-list">
+        <div class="card"><div class="skel skel-line" style="width:30%"></div><div class="skel skel-line"></div><div class="skel skel-line" style="width:80%"></div></div>
+        <div class="card"><div class="skel skel-line" style="width:25%"></div><div class="skel skel-line"></div><div class="skel skel-line" style="width:70%"></div></div>
+        <div class="card"><div class="skel skel-line" style="width:35%"></div><div class="skel skel-line"></div><div class="skel skel-line" style="width:60%"></div></div>
+      </div>
+      <details class="acc" id="source-status-wrap">
+        <summary><span class="ico">🛰️</span><span>Trạng thái nguồn tin<span class="sub" id="source-summary">Đang tải…</span></span><span class="chev">›</span></summary>
+        <div class="acc-body source-status" id="source-status"></div>
+      </details>
+    </section>
+
+    <!-- ===================== TAB 3: LAB TOOLS ===================== -->
+    <section class="tab" id="tab-tools" data-tab="tools" aria-label="Lab Tools">
+      <div id="tools-root"></div>
+    </section>
+
+    <!-- ===================== TAB 4: LƯU & GHI CHÚ ===================== -->
+    <section class="tab" id="tab-notes" data-tab="notes" aria-label="Lưu và ghi chú">
+      <div class="seg" id="notes-seg" style="margin-bottom:12px">
+        <button data-pane="log" class="active">📝 Lab Log</button>
+        <button data-pane="bookmarks">🔖 Đã lưu</button>
+        <button data-pane="settings">⚙️ Cài đặt</button>
+      </div>
+      <div class="notes-pane" data-pane="log" id="pane-log"></div>
+      <div class="notes-pane" data-pane="bookmarks" id="pane-bookmarks" hidden></div>
+      <div class="notes-pane" data-pane="settings" id="pane-settings" hidden></div>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar" aria-label="Điều hướng chính">
+    <button data-tab="today" class="active" aria-label="Sáng nay">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <span>Sáng nay</span>
+    </button>
+    <button data-tab="news" aria-label="Tin kỹ thuật">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1a10 10 0 0 1 0-14.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
+      <span>Tin kỹ thuật</span>
+    </button>
+    <button data-tab="tools" aria-label="Lab Tools">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>
+      <span>Lab Tools</span>
+    </button>
+    <button data-tab="notes" aria-label="Lưu và ghi chú">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      <span>Lưu & Ghi chú</span>
+    </button>
+  </nav>
+
+  <div class="ios-banner" id="ios-banner" hidden role="dialog" aria-label="Hướng dẫn cài đặt">
+    <div class="txt">Cài như app: bấm <b>Chia sẻ</b>
+      <svg class="share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>
+      → <b>Thêm vào MH chính</b></div>
+    <button class="icon-btn" id="ios-banner-close" aria-label="Đóng vĩnh viễn">✕</button>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

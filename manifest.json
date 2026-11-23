@@ -1,0 +1,18 @@
+{
+  "name": "Mechatronics Morning Hub",
+  "short_name": "Mecha Hub",
+  "description": "Bản tin buổi sáng & Lab Tools offline cho kỹ sư Cơ điện tử.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#090D16",
+  "theme_color": "#090D16",
+  "lang": "vi",
+  "categories": ["utilities", "productivity", "education"],
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
