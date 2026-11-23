@@ -21,13 +21,18 @@ let readSet = new Set(store.get('read', []));
 let inflight = null;
 
 /* ---------- Nguồn tin ---------- */
-export const gnewsUrl = (terms) =>
-  `https://news.google.com/rss/search?q=${encodeURIComponent(`${terms.slice(0, 4).join(' OR ')} when:7d`)}&hl=vi&gl=VN&ceid=VN:vi`;
+export const gnewsUrl = (terms) => {
+  const q = (terms && terms.length ? terms.slice(0, 3).join(' ') : 'robot AI chip');
+  return `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&mkt=vi-VN`;
+};
 
 function buildSources(s = getSettings()) {
   const list = s.feeds.filter((f) => f.enabled !== false && f.url).map((f) => ({ ...f, kind: 'rss' }));
   if (s.gnewsEnabled && s.gnewsTerms?.length) {
-    list.unshift({ id: 'gnews', name: 'Google News VN', kind: 'rss', group: 'vn', lang: 'vi', url: gnewsUrl(s.gnewsTerms) });
+    list.unshift({
+      id: 'gnews', name: 'Tin tổng hợp VN', kind: 'rss', group: 'vn', lang: 'vi',
+      url: 'https://www.bing.com/news/search?q=robot+AI+chip&format=rss&mkt=vi-VN',
+    });
   }
   if (s.githubEnabled && s.githubTopics?.length) {
     list.push({ id: 'github', name: 'GitHub Trending 7 ngày', kind: 'github', group: 'github', lang: 'en', topics: s.githubTopics });
