@@ -4,7 +4,7 @@
 // Pin LiPo/18650, Lọc RC & Timer PWM, Mô-men/RPM/Steps/mm/AWG, Encoder, Khí nén, Tra cứu linh kiện.
 import { BOARDS, CONNECTORS } from './data/pinouts.js';
 import { PARTS } from './data/parts.js';
-import { getSettings } from './storage.js';
+import { store, getSettings } from './storage.js';
 import { callGemini } from './feeds.js';
 import * as tts from './tts.js';
 import { $, $$, esc, num, toast } from './utils.js';
@@ -590,25 +590,32 @@ export function init() {
       </div>
     </details>
 
-    <!-- 0b. TRA NHANH CHÂN & MÃ THAY THẾ LINH KIỆN PHỔ THÔNG -->
-    <details class="acc" id="tool-parts">
+    <!-- 0b. TRA NHANH CHÂN & MÃ THAY THẾ LINH KIỆN (BẾP TỪ, MÁY HÀN + ONLINE AI) -->
+    <details class="acc" open id="tool-parts">
       <summary>
         <span class="ico">🔌</span>
-        <span>Tra chân &amp; Mã thay thế Linh kiện (Offline)<span class="sub">24 IC/MOSFET/BJT phổ biến: IRFZ44N, LM317, 7805…</span></span>
+        <span>Tra chân &amp; Thay thế Linh kiện (Bếp từ · Máy hàn)<span class="sub">25 mã phổ biến Offline + Tra Online AI mọi mã bất kỳ</span></span>
         <span class="chev">›</span>
       </summary>
       <div class="acc-body">
-        <input class="input mono" id="parts-q" placeholder="Gõ mã: IRFZ44N, IRLZ44N, LM317, 2N2222, PC817, TMC2209…" autocomplete="off">
-        <div class="chips" style="margin-top:8px">
-          <button class="chip" data-pq="IRFZ44N">IRFZ44N</button>
-          <button class="chip" data-pq="IRLZ44N">IRLZ44N</button>
-          <button class="chip" data-pq="LM317">LM317</button>
-          <button class="chip" data-pq="AMS1117">AMS1117</button>
-          <button class="chip" data-pq="2N2222">2N2222A</button>
-          <button class="chip" data-pq="PC817">PC817</button>
-          <button class="chip" data-pq="TMC2209">TMC2209</button>
+        <div class="row">
+          <input class="input mono" id="parts-q" placeholder="Gõ mã: H20R1203, FGH40N60, VIPER12A, SG3525, K2611…" autocomplete="off">
+          <button class="btn primary" id="parts-ai-btn" style="flex:0 0 auto">🌐 Tra Online</button>
         </div>
-        <div id="parts-list" style="margin-top:10px"></div>
+        <div class="chips" style="margin-top:8px">
+          <button class="chip" data-pq="H20R1203">H20R1203</button>
+          <button class="chip" data-pq="FGA25N120">FGA25N120</button>
+          <button class="chip" data-pq="FGH40N60">FGH40N60</button>
+          <button class="chip" data-pq="K2611">K2611</button>
+          <button class="chip" data-pq="VIPER12A">VIPER12A</button>
+          <button class="chip" data-pq="SG3525">SG3525</button>
+          <button class="chip" data-pq="UC3842">UC3842</button>
+          <button class="chip" data-pq="LM339">LM339</button>
+          <button class="chip" data-pq="D92-02">D92-02</button>
+          <button class="chip" data-pq="GBJ2510">GBJ2510</button>
+        </div>
+        <div id="parts-ai-out" style="margin-top:8px"></div>
+        <div id="parts-list" style="margin-top:8px"></div>
       </div>
     </details>
 
@@ -1151,32 +1158,81 @@ ${note ? `Yêu cầu thêm của Hiếu: ${note}` : ''}`;
   });
 }
 
-/* ---------- Tra cứu chân & mã thay thế 24 linh kiện phổ thông ---------- */
+/* ---------- Tra cứu chân & mã thay thế (Offline Bếp từ/Máy hàn + Tra Online AI có cache) ---------- */
 function bindPartsLookup() {
   const inp = $('#parts-q');
   const box = $('#parts-list');
-  const render = () => {
-    const q = (inp.value || '').trim().toLowerCase();
-    const list = q
-      ? PARTS.filter((p) => `${p.name} ${p.type} ${p.pkg} ${p.equiv} ${p.spec}`.toLowerCase().includes(q))
-      : PARTS.slice(0, 5);
-    if (!list.length) {
-      box.innerHTML = '<div class="empty">Không thấy mã này trong 24 linh kiện phổ thông — thử dùng mục "Tra cứu nhanh Linh kiện" bên dưới.</div>';
+  const aiOut = $('#parts-ai-out');
+  const aiBtn = $('#parts-ai-btn');
+  let aiCache = store.get('partsAiCache', {});
+
+  const renderCard = (p, isOnline = false) => `
+    <div class="result" style="margin-top:8px;font-family:var(--font)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <b class="mono" style="font-size:16px;color:var(--cyan)">${esc(p.name)}</b>
+        <span class="tag ${isOnline ? 'green' : ''}">${isOnline ? '🌐 Online · ' : ''}${esc(p.type)}${p.pkg ? ` · ${esc(p.pkg)}` : ''}</span>
+      </div>
+      <div style="margin-top:6px;font-size:13px"><b style="color:var(--green)">Chân:</b> <span class="mono">${esc(p.pins)}</span></div>
+      <div style="margin-top:4px;font-size:12.5px;color:var(--text)"><b>Thông số:</b> ${esc(p.spec)}</div>
+      <div style="margin-top:4px;font-size:12.5px;color:var(--amber)"><b>Thay thế:</b> ${esc(p.equiv)}</div>
+      ${p.note ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">💡 ${esc(p.note)}</div>` : ''}
+    </div>`;
+
+  const lookupOnline = async (codeRaw) => {
+    const code = (codeRaw || inp.value || '').trim().toUpperCase();
+    if (!code) { toast('Nhập mã linh kiện cần tra (VD: IKW40N120H3, OB2263…)'); inp.focus(); return; }
+    if (aiCache[code]) {
+      aiOut.innerHTML = renderCard(aiCache[code], true);
       return;
     }
-    box.innerHTML = list.map((p) => `
-      <div class="result" style="margin-top:8px;font-family:var(--font)">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-          <b class="mono" style="font-size:16px;color:var(--cyan)">${esc(p.name)}</b>
-          <span class="tag">${esc(p.type)} · ${esc(p.pkg)}</span>
-        </div>
-        <div style="margin-top:6px;font-size:13px"><b style="color:var(--green)">Chân:</b> <span class="mono">${esc(p.pins)}</span></div>
-        <div style="margin-top:4px;font-size:12.5px;color:var(--text)"><b>Thông số:</b> ${esc(p.spec)}</div>
-        <div style="margin-top:4px;font-size:12.5px;color:var(--amber)"><b>Thay thế:</b> ${esc(p.equiv)}</div>
-        <div style="margin-top:4px;font-size:12px;color:var(--muted)">💡 ${esc(p.note)}</div>
-      </div>`).join('');
+    const key = getSettings().geminiKey;
+    if (!key) {
+      aiOut.innerHTML = `<div class="result" style="font-family:var(--font);font-size:13px">
+        Chưa có Gemini API Key để tra tự động. Mở nhanh:
+        <a href="https://www.alldatasheet.com/view.jsp?Searchword=${encodeURIComponent(code)}" target="_blank" rel="noopener">AllDatasheet (${esc(code)})</a> ·
+        <a href="https://www.lcsc.com/search?q=${encodeURIComponent(code)}" target="_blank" rel="noopener">LCSC</a>
+      </div>`;
+      return;
+    }
+    aiBtn.disabled = true;
+    aiOut.innerHTML = `<div class="result"><div class="skel skel-line"></div><div class="skel skel-line" style="width:75%"></div></div>`;
+    try {
+      const prompt = `Bạn là kỹ sư sửa chữa điện tử công suất (bếp từ, máy hàn điện tử, nguồn xung).
+Tra cứu chính xác linh kiện mã "${code}". Chỉ trả về JSON thuần túy (KHÔNG markdown, KHÔNG giải thích ngoài JSON):
+{"name":"${code}","type":"Loại linh kiện (VD: IGBT bếp từ / MOSFET máy hàn / IC nguồn xung)","pkg":"Kiểu vỏ (VD: TO-247 / DIP-8)","pins":"Thứ tự chân nhìn từ mặt chữ","spec":"Thông số điện áp, dòng, tần số chính","equiv":"3-5 mã thay thế tương đương hoặc nâng cấp dễ mua tại Việt Nam","note":"Lưu ý sống còn khi thay trên bếp từ/máy hàn"}`;
+      const raw = await callGemini(key, prompt);
+      const m = raw.match(/\{[\s\S]*\}/);
+      const obj = JSON.parse(m ? m[0] : raw);
+      if (!obj?.pins) throw new Error('Không phân tích được thông tin chân');
+      aiCache[code] = obj;
+      store.set('partsAiCache', aiCache);
+      aiOut.innerHTML = renderCard(obj, true);
+    } catch (e) {
+      aiOut.innerHTML = `<div class="result" style="font-family:var(--font)"><span class="err">Lỗi tra online: ${esc(e.message)}</span><br><a href="https://www.alldatasheet.com/view.jsp?Searchword=${encodeURIComponent(code)}" target="_blank" rel="noopener">Mở AllDatasheet cho ${esc(code)} →</a></div>`;
+    } finally {
+      aiBtn.disabled = false;
+    }
   };
+
+  const render = () => {
+    const q = (inp.value || '').trim();
+    const ql = q.toLowerCase();
+    const cachedHit = q ? aiCache[q.toUpperCase()] : null;
+    aiOut.innerHTML = cachedHit ? renderCard(cachedHit, true) : '';
+    const list = ql
+      ? PARTS.filter((p) => `${p.name} ${p.type} ${p.pkg} ${p.equiv} ${p.spec} ${p.note}`.toLowerCase().includes(ql))
+      : PARTS.slice(0, 5);
+    if (!list.length && !cachedHit) {
+      box.innerHTML = `<div class="empty">Không thấy <b>${esc(q)}</b> trong 25 mã offline.<br><button class="btn sm primary" id="parts-try-online" style="margin-top:8px">🌐 Tra Online mã "${esc(q)}" bằng AI</button></div>`;
+      $('#parts-try-online')?.addEventListener('click', () => lookupOnline(q));
+      return;
+    }
+    box.innerHTML = list.map((p) => renderCard(p, false)).join('');
+  };
+
   inp.addEventListener('input', render);
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); lookupOnline(); } });
+  aiBtn.addEventListener('click', () => lookupOnline());
   $$('[data-pq]').forEach((b) => b.addEventListener('click', () => { inp.value = b.dataset.pq; render(); }));
   render();
 }
