@@ -6,7 +6,7 @@ import { BOARDS, CONNECTORS } from './data/pinouts.js';
 import { PARTS } from './data/parts.js';
 import { INDUCTION_ERRORS, WELDER_FAULTS, MULTIMETER_GUIDES } from './data/repair.js';
 import { store, getSettings } from './storage.js';
-import { callGemini, callGeminiPro } from './feeds.js';
+import { callGemini, callGeminiPro, hasAIKey } from './feeds.js';
 import * as tts from './tts.js';
 import { $, $$, esc, num, toast } from './utils.js';
 
@@ -1159,8 +1159,8 @@ function bindVision() {
   let lastVisionText = '';
 
   pickBtn.addEventListener('click', () => {
-    if (!getSettings().geminiKey) {
-      toast('Hãy nhập Gemini API Key trong Tab 4 → Cài đặt trước');
+    if (!hasAIKey()) {
+      toast('Hãy nhập Gemini hoặc Groq API Key trong Tab 4 → Cài đặt trước');
       return;
     }
     fileInp.click();
@@ -1176,8 +1176,8 @@ function bindVision() {
     const f = fileInp.files?.[0];
     fileInp.value = '';
     if (!f) return;
+    if (!hasAIKey()) { toast('Thiếu API Key AI (Gemini hoặc Groq)'); return; }
     const key = getSettings().geminiKey;
-    if (!key) { toast('Thiếu Gemini API Key'); return; }
     pickBtn.disabled = true;
     speakBtn.hidden = true;
     out.innerHTML = '<div class="skel skel-line"></div><div class="skel skel-line" style="width:80%"></div><div class="skel skel-line" style="width:60%"></div>';
@@ -1231,15 +1231,15 @@ function bindPartsLookup() {
       aiOut.innerHTML = renderCard(aiCache[code], true);
       return;
     }
-    const key = getSettings().geminiKey;
-    if (!key) {
+    if (!hasAIKey()) {
       aiOut.innerHTML = `<div class="result" style="font-family:var(--font);font-size:13px">
-        Chưa có Gemini API Key để tra tự động. Mở nhanh:
+        Chưa có API Key AI (Gemini / Groq) để tra tự động. Mở nhanh:
         <a href="https://www.alldatasheet.com/view.jsp?Searchword=${encodeURIComponent(code)}" target="_blank" rel="noopener">AllDatasheet (${esc(code)})</a> ·
         <a href="https://www.lcsc.com/search?q=${encodeURIComponent(code)}" target="_blank" rel="noopener">LCSC</a>
       </div>`;
       return;
     }
+    const key = getSettings().geminiKey;
     aiBtn.disabled = true;
     aiOut.innerHTML = `<div class="result"><div class="skel skel-line"></div><div class="skel skel-line" style="width:75%"></div></div>`;
     try {
@@ -1326,8 +1326,8 @@ function bindDiagTool() {
   aiBtn.addEventListener('click', async () => {
     const q = ($('#diag-q')?.value || '').trim();
     if (!q) { toast('Nhập triệu chứng máy/lỗi cần chẩn đoán trước'); $('#diag-q')?.focus(); return; }
+    if (!hasAIKey()) { toast('Hãy nhập Gemini hoặc Groq API Key trong Tab 4 → Cài đặt'); return; }
     const key = getSettings().geminiKey;
-    if (!key) { toast('Hãy nhập Gemini API Key trong Tab 4 → Cài đặt'); return; }
     aiBtn.disabled = true;
     spkBtn.hidden = true;
     aiOut.hidden = false;

@@ -67,6 +67,7 @@ export const DEFAULT_SETTINGS = {
   githubTopics: ['esp32', 'stm32', 'ros2', 'robotics', 'embedded'],
   theme: 'dark', // dark | light | system
   geminiKey: '',
+  groqKey: '', // Dự phòng siêu nhanh miễn phí từ console.groq.com (chỉ lưu cục bộ)
   workerUrl: isLocalHost ? '' : 'https://mecha-hub-api.hieuminh0945.workers.dev',
   techOnly: true, // Lọc tin tiêu dùng rác ở nguồn VN tổng hợp
   saveData4G: false, // Tiết kiệm 4G: chỉ tải mạng khi chủ động bấm nút ↻
@@ -96,7 +97,7 @@ export function saveSettings(patch) {
 export function exportAll({ includeKey = false } = {}) {
   const data = {};
   for (const k of store.keys()) data[k] = store.get(k);
-  if (data.settings && !includeKey) data.settings = { ...data.settings, geminiKey: '' };
+  if (data.settings && !includeKey) data.settings = { ...data.settings, geminiKey: '', groqKey: '' };
   return { app: APP_ID, version: 1, exportedAt: new Date().toISOString(), data };
 }
 
@@ -104,11 +105,17 @@ export function importAll(obj) {
   if (!obj || obj.app !== APP_ID || typeof obj.data !== 'object' || obj.data === null) {
     throw new Error('Tệp không đúng định dạng sao lưu Mechatronics Morning Hub');
   }
-  const currentKey = getSettings().geminiKey;
+  const cur = getSettings();
   let n = 0;
   for (const [k, v] of Object.entries(obj.data)) {
     let val = v;
-    if (k === 'settings' && val && !val.geminiKey && currentKey) val = { ...val, geminiKey: currentKey };
+    if (k === 'settings' && val) {
+      val = {
+        ...val,
+        geminiKey: val.geminiKey || cur.geminiKey || '',
+        groqKey: val.groqKey || cur.groqKey || '',
+      };
+    }
     if (store.set(k, val)) n++;
   }
   return n;

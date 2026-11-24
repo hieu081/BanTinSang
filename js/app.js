@@ -121,8 +121,8 @@ function sparkToSpeech(sp) {
 }
 
 async function askAISparkExample() {
+  if (!feeds.hasAIKey()) { toast('Cần nhập Gemini hoặc Groq API Key trong Cài đặt'); return; }
   const key = getSettings().geminiKey;
-  if (!key) { toast('Cần nhập Gemini API Key trong Cài đặt'); return; }
   const sp = SPARKS[sparkIdx];
   const wrap = document.createElement('div');
   wrap.className = 'sheet-backdrop';
@@ -153,11 +153,11 @@ function initSpark() {
   renderSpark(true);
   const syncSparkAI = () => {
     const b = $('#spark-ai-ask');
-    if (b) b.hidden = !getSettings().geminiKey;
+    if (b) b.hidden = !feeds.hasAIKey();
   };
   syncSparkAI();
   window.addEventListener('settings-changed', (e) => {
-    if (e.detail.keys.includes('geminiKey')) syncSparkAI();
+    if (e.detail.keys.includes('geminiKey') || e.detail.keys.includes('groqKey')) syncSparkAI();
   });
   $('#spark-speak')?.addEventListener('click', () => {
     const sp = SPARKS[sparkIdx];
@@ -293,7 +293,7 @@ function boot() {
 
   // Nút Podcast AI Sáng nay (1 chạm tổng hợp cả ngày & đọc xuyên suốt)
   const podBtn = $('#tts-podcast-ai');
-  const syncPodBtn = () => { if (podBtn) podBtn.hidden = !getSettings().geminiKey; };
+  const syncPodBtn = () => { if (podBtn) podBtn.hidden = !feeds.hasAIKey(); };
   syncPodBtn();
   podBtn?.addEventListener('click', async () => {
     podBtn.disabled = true;
@@ -315,7 +315,7 @@ function boot() {
   window.addEventListener('force-refresh', () => refreshAll(true));
   window.addEventListener('settings-changed', (e) => {
     if (e.detail.keys.some((k) => ['location', 'useGPS'].includes(k))) telemetry.refresh(true);
-    if (e.detail.keys.includes('geminiKey')) syncPodBtn();
+    if (e.detail.keys.includes('geminiKey') || e.detail.keys.includes('groqKey')) syncPodBtn();
   });
 
   // Đồng bộ ngầm khi mở app (bỏ qua nếu bật Tiết kiệm 4G)

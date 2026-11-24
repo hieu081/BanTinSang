@@ -543,6 +543,37 @@ details.acc[open] > summary { border-bottom: 1px solid var(--border); }
 .geo-results button { width: 100%; text-align: left; min-height: 44px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 6px; }
 .geo-results button small { display: block; color: var(--muted); font-family: var(--mono); font-size: 11px; }
 
+/* ---------- Mini-Player nổi phía trên Tab bar ---------- */
+.mini-player {
+  position: fixed; left: calc(8px + var(--sal)); right: calc(8px + var(--sar));
+  bottom: calc(var(--tabbar-h) + var(--sab) + 8px); z-index: 42;
+  max-width: 704px; margin: 0 auto;
+  background: var(--tabbar-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 13px; overflow: hidden;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
+  animation: fadeIn .2s ease;
+}
+.mp-prog { height: 2.5px; background: var(--surface-3); }
+.mp-prog i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width .3s ease; }
+.mp-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; min-height: 44px; }
+.mp-info {
+  flex: 1; min-width: 0; border: 0; background: transparent; padding: 4px 2px;
+  display: flex; align-items: center; gap: 8px; text-align: left;
+}
+.mp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); flex: none; animation: blink 1.2s ease-in-out infinite; }
+.mp-dot.paused { background: var(--amber); box-shadow: none; animation: none; }
+.mp-text { font-size: 13px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-btn {
+  width: 36px; height: 36px; border-radius: 9px; flex: none;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-strong);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.mp-btn:active { transform: scale(0.92); }
+body.has-mini-player main { padding-bottom: calc(var(--tabbar-h) + var(--sab) + 78px); }
+
 /* ---------- Tab bar ---------- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;

@@ -132,6 +132,22 @@ export function render() {
       <p class="hint">Gọi thẳng endpoint chính thức <code class="mono">gemini-2.5-flash</code>. Không nhập key mọi tính năng khác vẫn chạy bình thường.</p>
     </div>
 
+    <!-- Groq AI (Dự phòng siêu nhanh miễn phí) -->
+    <div class="card settings-group">
+      <div class="card-head"><div class="card-title">⚡ Groq AI (Dự phòng siêu nhanh)</div><span class="tag ${s.groqKey ? 'green' : ''}">${s.groqKey ? 'Đã cấu hình' : 'Chưa nhập'}</span></div>
+      <div class="row">
+        <label class="field"><span>Groq API Key (lưu cục bộ trên máy bạn)</span>
+          <input class="input mono" id="set-groqkey" type="password" value="${esc(s.groqKey || '')}" placeholder="gsk_…">
+        </label>
+        <button class="btn" id="set-groqkey-eye" style="flex:0 0 auto" aria-label="Ẩn/hiện Groq key">👁</button>
+      </div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn sm primary" id="set-groqkey-save">Lưu Groq Key</button>
+        <button class="btn sm danger" id="set-groqkey-del" ${s.groqKey ? '' : 'disabled'}>Xóa Key</button>
+      </div>
+      <p class="hint">Tự động chạy dự phòng (<code class="mono">Llama-3.3-70B</code> / <code class="mono">Llama-4-Scout</code>) trong ~1 giây hễ Gemini Free Tier bị nghẽn <code class="mono">high demand</code>.</p>
+    </div>
+
     <!-- Giao diện -->
     <div class="card settings-group">
       <div class="card-head"><div class="card-title">🎨 Giao diện</div></div>
@@ -313,6 +329,23 @@ export function init() {
     if (btn.id === 'set-gkey-del') {
       saveSettings({ geminiKey: '' });
       toast('Đã xóa Gemini API Key');
+      render();
+      return;
+    }
+    if (btn.id === 'set-groqkey-eye') {
+      const inp = $('#set-groqkey');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+      return;
+    }
+    if (btn.id === 'set-groqkey-save') {
+      saveSettings({ groqKey: $('#set-groqkey').value.trim() });
+      toast('Đã lưu Groq API Key cục bộ');
+      render();
+      return;
+    }
+    if (btn.id === 'set-groqkey-del') {
+      saveSettings({ groqKey: '' });
+      toast('Đã xóa Groq API Key');
       render();
       return;
     }

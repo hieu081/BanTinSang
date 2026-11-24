@@ -234,15 +234,32 @@ function setUI() {
   const badge = $('#tts-badge');
   const bar = $('#tts-prog-bar');
   const st = $('#tts-status');
+  const mp = $('#mini-player');
+  const mpBar = $('#mp-bar');
+  const mpText = $('#mp-text');
+  const mpPlay = $('#mp-play');
+  const mpDot = $('#mp-dot');
   if (!playing) {
     if (badge) badge.textContent = 'Sẵn sàng';
     if (bar) bar.style.width = '0%';
     st.textContent = 'Lời chào · Telemetry thời tiết · 5 tin ưu tiên (tiếng Việt)';
+    if (mp) mp.hidden = true;
+    document.body.classList.remove('has-mini-player');
   } else {
-    if (badge) badge.textContent = paused ? 'Tạm dừng' : `${idx + 1}/${queue.length}`;
-    if (bar) bar.style.width = `${Math.round(((idx + 1) / Math.max(1, queue.length)) * 100)}%`;
+    const pct = `${Math.round(((idx + 1) / Math.max(1, queue.length)) * 100)}%`;
     const cur = queue[idx];
-    st.textContent = `${paused ? '⏸' : '🎙️'} ${cur?.display || cur?.text || ''}`;
+    const txt = cur?.display || cur?.text || '';
+    if (badge) badge.textContent = paused ? 'Tạm dừng' : `${idx + 1}/${queue.length}`;
+    if (bar) bar.style.width = pct;
+    st.textContent = `${paused ? '⏸' : '🎙️'} ${txt}`;
+    if (mp) {
+      mp.hidden = false;
+      document.body.classList.add('has-mini-player');
+      if (mpBar) mpBar.style.width = pct;
+      if (mpText) mpText.textContent = `${idx + 1}/${queue.length} · ${txt}`;
+      if (mpPlay) mpPlay.textContent = paused ? '▶' : '⏸';
+      if (mpDot) mpDot.classList.toggle('paused', paused);
+    }
   }
   updateMediaSession(queue[idx]);
 }
@@ -430,6 +447,13 @@ export function init({ build }) {
   $('#tts-next').addEventListener('click', next);
   $('#tts-stop').addEventListener('click', stop);
   $('#tts-rate').addEventListener('click', cycleRate);
+  $('#mp-play')?.addEventListener('click', play);
+  $('#mp-next')?.addEventListener('click', next);
+  $('#mp-stop')?.addEventListener('click', stop);
+  $('#mp-goto')?.addEventListener('click', () => {
+    document.querySelector('#tabbar button[data-tab="today"]')?.click();
+    $('#tts-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
   $('#tts-voice-select')?.addEventListener('change', (e) => {
     savedVoiceId = e.target.value;
     selectedId = savedVoiceId;

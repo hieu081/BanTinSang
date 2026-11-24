@@ -1,7 +1,7 @@
 // notes.js — Bookmarks (có tìm kiếm nhanh), Lab Log & Sổ tay BOM tính chi phí đồ án + Copy Markdown
 import { store, getSettings } from './storage.js';
 import { $, $$, esc, timeAgo, fmtDateTime, toast, copyText, num } from './utils.js';
-import { callGemini } from './feeds.js';
+import { callGemini, hasAIKey } from './feeds.js';
 
 export const BM_TAGS = ['#Nhúng', '#CơKhí', '#ĐồÁn', '#Robotics'];
 export const LOG_TAGS = ['#Ý_tưởng', '#Mua_linh_kiện', '#Bug_cần_fix'];
@@ -186,7 +186,7 @@ export function renderLog() {
         </div>
         <div class="btn-row">
           <button class="btn primary" type="submit">＋ Thêm ${isBomTag ? 'vào BOM' : 'ghi chú'}</button>
-          ${isBomTag && getSettings().geminiKey ? '<button class="btn" type="button" id="bom-ai-gen">🤖 AI lập BOM</button>' : ''}
+          ${isBomTag && hasAIKey() ? '<button class="btn" type="button" id="bom-ai-gen">🤖 AI lập BOM</button>' : ''}
         </div>
       </form>
     </div>

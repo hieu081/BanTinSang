@@ -422,10 +422,15 @@ const STAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const SPEAK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
 const AI_READ_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>';
 
+export function hasAIKey() {
+  const s = getSettings();
+  return Boolean((s.geminiKey || '').trim() || (s.groqKey || '').trim());
+}
+
 function newsCard(it) {
   const read = readSet.has(it.id);
   const bm = isBookmarked(it.id);
-  const hasKey = !!getSettings().geminiKey;
+  const hasKey = hasAIKey();
   const disp = getDisplayText(it);
   const radarBadge = it.radar.length ? '<span class="radar-badge">RADAR</span>' : '';
   const trBadge = disp.translated ? '<span class="tr-badge">🇻🇳 Đã dịch</span>' : (it.lang === 'en' ? '<span class="tag">EN</span>' : '');
@@ -493,7 +498,7 @@ export function render(triggerTranslate = true) {
 
   renderToday();
   renderStatus();
-  $('#ai-btn').hidden = !getSettings().geminiKey;
+  $('#ai-btn').hidden = !hasAIKey();
   tts.refreshHighlight();
 
   if (triggerTranslate) {
@@ -606,7 +611,51 @@ async function discoverModels(cleanKey, pattern = /(flash|gemma)/i) {
   }
 }
 
+const GROQ_TEXT_MODELS = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'qwen/qwen3-32b', 'llama-3.1-8b-instant'];
+const GROQ_VISION_MODELS = ['meta-llama/llama-4-scout-17b-16e-instruct', 'meta-llama/llama-4-maverick-17b-128e-instruct'];
+
+async function callGroq(groqKey, prompt, inlineImage = null) {
+  const cleanKey = String(groqKey || '').trim();
+  const models = inlineImage?.data ? GROQ_VISION_MODELS : GROQ_TEXT_MODELS;
+  const content = inlineImage?.data
+    ? [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:${inlineImage.mimeType || 'image/jpeg'};base64,${inlineImage.data}` } },
+      ]
+    : prompt;
+  const errs = [];
+  for (const model of models) {
+    try {
+      const r = await fetchWithTimeout('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cleanKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content }],
+          temperature: 0.3,
+          max_tokens: 1400,
+        }),
+      }, 25000);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = j.error?.message || `HTTP ${r.status}`;
+        if (r.status === 401) throw new Error(`GROQ_KEY_INVALID: ${msg}`);
+        errs.push(`${model}: ${msg.slice(0, 90)}`);
+        continue;
+      }
+      let text = j.choices?.[0]?.message?.content || '';
+      text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+      if (text) return { text, model: `Groq · ${model}` };
+    } catch (e) {
+      if (String(e.message).startsWith('GROQ_KEY_INVALID')) throw e;
+      errs.push(`${model}: ${e.message}`);
+    }
+  }
+  throw new Error(errs.slice(0, 2).join(' | ') || 'Không gọi được Groq API');
+}
+
 async function runGeminiChain(cleanKey, prompt, inlineImage, preferredList) {
+  const groqKey = (getSettings().groqKey || '').trim();
   const tried = new Set();
   const busyModels = [];
   const errors = [];
@@ -627,26 +676,45 @@ async function runGeminiChain(cleanKey, prompt, inlineImage, preferredList) {
     return null;
   };
 
-  // Lượt 1: Thử các model Flash mạnh nhất trên Free Tier
-  const r1 = await runList(preferredList);
-  if (r1) return r1;
+  // Nếu chỉ có Groq Key (chưa nhập Gemini Key) → chạy thẳng Groq siêu nhanh
+  if (!cleanKey && groqKey) {
+    return callGroq(groqKey, prompt, inlineImage);
+  }
 
-  // Lượt 2: Nếu tất cả đang bận (high demand), thử thêm Gemma (hầu như không bị nghẽn) + các model text khác trên tài khoản
-  const gemmaModels = inlineImage ? [] : await discoverModels(cleanKey, /^gemma-/i);
-  const otherFlash = await discoverModels(cleanKey, /flash/i);
-  const r2 = await runList([...gemmaModels.slice(0, 3), ...otherFlash.slice(0, 3)]);
-  if (r2) return r2;
+  // Lượt 1: Thử các model Flash mạnh nhất trên Gemini
+  if (cleanKey) {
+    const r1 = await runList(groqKey ? preferredList.slice(0, 2) : preferredList);
+    if (r1) return r1;
+  }
 
-  // Lượt 3: Chờ 1.5s rồi thử lại đúng model đầu tiên đang bận (high demand thường hết ngay)
+  // Lượt 2 (ƯU TIÊN DỰ PHÒNG): Nếu đã nhập Groq Key, chuyển ngay sang Groq phản hồi < 1 giây!
+  if (groqKey) {
+    try {
+      return await callGroq(groqKey, prompt, inlineImage);
+    } catch (ge) {
+      errors.push(`Groq: ${ge.message}`);
+    }
+  }
+
+  // Lượt 3: Fallback sang Gemma + các model Flash còn lại trên Gemini
+  if (cleanKey) {
+    const rRest = await runList(preferredList);
+    if (rRest) return rRest;
+    const gemmaModels = inlineImage ? [] : await discoverModels(cleanKey, /^gemma-/i);
+    const otherFlash = await discoverModels(cleanKey, /flash/i);
+    const r2 = await runList([...gemmaModels.slice(0, 3), ...otherFlash.slice(0, 3)]);
+    if (r2) return r2;
+  }
+
   if (busyModels.length) {
     await new Promise((res) => setTimeout(res, 1500));
     try {
       const text = await tryGeminiModel(busyModels[0], cleanKey, prompt, inlineImage);
       return { text, model: busyModels[0] };
     } catch (_) { /* rơi xuống báo lỗi gọn */ }
-    throw new Error(`Máy chủ miễn phí Google đang quá tải tạm thời (${busyModels.slice(0, 3).join(', ')}). Bấm thử lại sau 5–10 giây nhé!`);
+    throw new Error(`Máy chủ miễn phí Google đang quá tải (${busyModels.slice(0, 2).join(', ')}). Hãy dán thêm Groq Key trong Cài đặt để chạy tức thì!`);
   }
-  throw new Error(errors.slice(0, 2).join(' | ') || 'Không gọi được Gemini API');
+  throw new Error(errors.slice(0, 2).join(' | ') || 'Chưa cấu hình API Key AI (Gemini hoặc Groq)');
 }
 
 export async function callGemini(key, prompt, inlineImage = null) {
@@ -685,8 +753,8 @@ function renderAI() {
 }
 
 async function aiSummarize() {
+  if (!hasAIKey()) return;
   const key = getSettings().geminiKey;
-  if (!key) return;
   if (!items.length) { toast('Chưa có tin để tóm tắt'); return; }
   const btn = $('#ai-btn');
   const box = $('#ai-box');
@@ -721,8 +789,8 @@ ${top}`;
 
 /** AI Đọc hộ toàn văn 1 bài báo (lấy qua /api/article nếu có, tóm gọn ý kỹ thuật + đọc thành tiếng) */
 async function readArticleWithAI(it) {
+  if (!hasAIKey()) { toast('Hãy nhập Gemini hoặc Groq API Key trong Cài đặt trước'); return; }
   const key = getSettings().geminiKey;
-  if (!key) { toast('Hãy nhập Gemini API Key trong Cài đặt trước'); return; }
   const disp = getDisplayText(it);
   const wrap = document.createElement('div');
   wrap.className = 'sheet-backdrop';
@@ -787,8 +855,8 @@ ${sourceText.slice(0, 5000)}`;
 
 /** Biên tập Podcast AI Sáng nay hoàn chỉnh dành cho Hiếu (có cache trong ngày) */
 export async function buildAIPodcast(weatherText = '', force = false) {
+  if (!hasAIKey()) throw new Error('Chưa nhập Gemini hoặc Groq API Key trong Cài đặt.');
   const key = getSettings().geminiKey;
-  if (!key) throw new Error('Chưa nhập Gemini API Key trong Cài đặt.');
   const todayKey = new Date().toISOString().slice(0, 10);
   const cached = store.get('podcastCache');
   if (!force && cached && cached.day === todayKey && Array.isArray(cached.segments) && cached.segments.length) {
@@ -901,7 +969,10 @@ export function init() {
       render(true);
       refresh(true);
     }
-    if (k.includes('geminiKey')) $('#ai-btn').hidden = !e.detail.settings.geminiKey;
+    if (k.includes('geminiKey') || k.includes('groqKey')) {
+      $('#ai-btn').hidden = !hasAIKey();
+      render(false);
+    }
   });
   window.addEventListener('bookmarks-changed', () => {
     $$('[data-bm]').forEach((b) => b.classList.toggle('on', isBookmarked(b.dataset.bm)));
