@@ -551,8 +551,9 @@ function markRead(id) {
 const findItem = (id) => items.find((i) => i.id === id);
 
 /* ---------- Gemini BYOK ---------- */
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
-const GEMINI_PRO_MODELS = ['gemini-3.8-pro', 'gemini-3.5-pro', 'gemini-2.5-pro', 'gemini-3.8-flash'];
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview'];
+const GEMINI_PRO_MODELS = ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+const NON_TEXT_MODEL_RE = /(image|tts|audio|live|embed|lyria|veo|banana|imagen|aqa|robotics|computer-use)/i;
 
 async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
@@ -585,7 +586,13 @@ async function discoverModels(cleanKey, pattern = /flash/i) {
   try {
     const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {}, 10000);
     return (j.models || [])
-      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent') && pattern.test(m.name))
+      .filter((m) => {
+        const id = (m.name || '').replace(/^models\//, '');
+        return (m.supportedGenerationMethods || []).includes('generateContent')
+          && /^gemini-/i.test(id)
+          && !NON_TEXT_MODEL_RE.test(id)
+          && pattern.test(id);
+      })
       .map((m) => m.name.replace(/^models\//, ''))
       .reverse();
   } catch (_) {
@@ -637,12 +644,11 @@ export async function callGeminiPro(key, prompt, inlineImage = null) {
     }
     return null;
   };
-  // Tự dò các model Pro khả dụng của tài khoản trước, kết hợp danh sách ưu tiên
-  const proDiscovered = await discoverModels(cleanKey, /pro/i);
-  const first = await runList([...proDiscovered.slice(0, 3), ...GEMINI_PRO_MODELS]);
+  // Ưu tiên danh sách model text Pro/Flash chuẩn trước, sau đó mới tự dò thêm model text Gemini sạch
+  const first = await runList(GEMINI_PRO_MODELS);
   if (first) return first;
-  const flashDiscovered = await discoverModels(cleanKey, /flash/i);
-  const second = await runList(flashDiscovered.slice(0, 3));
+  const discovered = await discoverModels(cleanKey, /(pro|flash)/i);
+  const second = await runList(discovered.slice(0, 4));
   if (second) return second;
   throw new Error(errors.join(' | ') || 'Không gọi được Gemini Pro API');
 }

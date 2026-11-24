@@ -98,9 +98,9 @@ export async function fetchWeather(loc) {
   const q = `latitude=${loc.lat}&longitude=${loc.lon}&timezone=auto`;
   const fUrl = `https://api.open-meteo.com/v1/forecast?${q}`
     + '&current=temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation,is_day'
-    + '&hourly=precipitation_probability'
-    + '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset'
-    + '&forecast_days=1&wind_speed_unit=kmh';
+    + '&hourly=temperature_2m,relative_humidity_2m,precipitation_probability,weather_code,wind_speed_10m,is_day'
+    + '&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset,weather_code'
+    + '&forecast_days=2&wind_speed_unit=kmh';
   const aUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?${q}&current=pm2_5,pm10,us_aqi`;
 
   const [fr, ar] = await Promise.allSettled([fetchJSON(fUrl, {}, 12000), fetchJSON(aUrl, {}, 12000)]);
@@ -108,10 +108,32 @@ export async function fetchWeather(loc) {
   const f = fr.value;
   const c = f.current || {};
   const d = f.daily || {};
+  const h = f.hourly || {};
   let rainNow = null;
-  if (f.hourly?.time && c.time) {
-    const i = f.hourly.time.indexOf(`${c.time.slice(0, 13)}:00`);
-    if (i >= 0) rainNow = f.hourly.precipitation_probability[i];
+  let hourly = [];
+  if (Array.isArray(h.time) && h.time.length) {
+    const curPrefix = c.time ? `${c.time.slice(0, 13)}:00` : '';
+    const startIdx = Math.max(0, curPrefix ? h.time.indexOf(curPrefix) : 0);
+    if (startIdx >= 0) rainNow = h.precipitation_probability?.[startIdx] ?? null;
+    // Lấy trọn 24 giờ (từ 00h hôm nay nếu ban ngày, hoặc 24h tới kể từ hiện tại)
+    const todayDate = c.time ? c.time.slice(0, 10) : h.time[0].slice(0, 10);
+    const todaySlots = [];
+    for (let i = 0; i < h.time.length; i++) {
+      if (i >= startIdx && todaySlots.length < 24) {
+        todaySlots.push({
+          time: h.time[i],
+          hour: h.time[i].slice(11, 13),
+          isToday: h.time[i].startsWith(todayDate),
+          t: h.temperature_2m?.[i],
+          rh: h.relative_humidity_2m?.[i],
+          rain: h.precipitation_probability?.[i] ?? 0,
+          code: h.weather_code?.[i],
+          wind: h.wind_speed_10m?.[i],
+          isDay: h.is_day?.[i],
+        });
+      }
+    }
+    hourly = todaySlots;
   }
   const aq = ar.status === 'fulfilled' ? ar.value.current || {} : {};
   if (ar.status !== 'fulfilled') console.warn('[telemetry] AQI lỗi:', ar.reason?.message);
@@ -124,6 +146,11 @@ export async function fetchWeather(loc) {
     tmin: d.temperature_2m_min?.[0], tmax: d.temperature_2m_max?.[0],
     rainMax: d.precipitation_probability_max?.[0], rainNow,
     uv: d.uv_index_max?.[0], sunrise: d.sunrise?.[0], sunset: d.sunset?.[0],
+    tomorrow: d.temperature_2m_min?.[1] != null ? {
+      tmin: d.temperature_2m_min[1], tmax: d.temperature_2m_max[1],
+      rainMax: d.precipitation_probability_max?.[1], code: d.weather_code?.[1],
+    } : null,
+    hourly,
     pm25: aq.pm2_5 ?? null, pm10: aq.pm10 ?? null, aqi: aq.us_aqi ?? null,
     obsTime: c.time, tz: f.timezone_abbreviation,
   };
@@ -154,6 +181,27 @@ function renderWeather(entry, mode) {
   const icon = w.isDay === 0 && info[2] ? info[2] : info[1];
   const aq = aqiInfo(w.aqi);
   const rain = w.rainNow != null ? `${w.rainNow}%` : '—';
+  const sunStr = w.sunrise && w.sunset ? `🌅 ${w.sunrise.slice(11, 16)} · 🌇 ${w.sunset.slice(11, 16)}` : '';
+  const hourlyHTML = Array.isArray(w.hourly) && w.hourly.length ? `
+    <div class="wx-hourly-head">
+      <span>⏱ Dự báo 24 giờ tới (vuốt ngang)</span>
+      ${w.tomorrow ? `<span class="mono">Mai: ${f0(w.tomorrow.tmin)}°–${f0(w.tomorrow.tmax)}° · 💧${f0(w.tomorrow.rainMax)}%</span>` : ''}
+    </div>
+    <div class="wx-hourly" role="list" aria-label="Dự báo thời tiết 24 giờ">
+      ${w.hourly.map((slot, idx) => {
+        const si = WMO[slot.code] || ['—', '🌡️'];
+        const sico = slot.isDay === 0 && si[2] ? si[2] : si[1];
+        const rCls = slot.rain >= 60 ? 'rain-hi' : slot.rain >= 30 ? 'rain-md' : '';
+        return `<div class="wx-h-item${idx === 0 ? ' now' : ''}" role="listitem">
+          <div class="h-lbl">${idx === 0 ? 'Bây giờ' : `${slot.hour}h`}${!slot.isToday && slot.hour === '00' ? ' ⁺¹' : ''}</div>
+          <div class="h-ico">${sico}</div>
+          <div class="h-tmp">${f0(slot.t)}°</div>
+          <div class="h-rain ${rCls}">💧${f0(slot.rain)}%</div>
+          <div class="h-rh">${f0(slot.rh)}%</div>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
   body.innerHTML = `
     <div class="wx-head">
       <div class="wx-icon" aria-hidden="true">${icon}</div>
@@ -172,8 +220,9 @@ function renderWeather(entry, mode) {
       <div class="metric"><div class="k">PM2.5</div><div class="v">${f1(w.pm25)}<small>µg/m³</small></div><div class="s">PM10 ${f0(w.pm10)}</div></div>
       <div class="metric"><div class="k">US AQI</div><div class="v">${f0(w.aqi)}</div><div class="s"><span class="tag ${aq.cls}" style="height:18px">${esc(aq.label)}</span></div></div>
     </div>
+    ${hourlyHTML}
     <div class="card-foot">
-      <span>${w.loc.source === 'gps' ? '🛰️ GPS' : '📌 Vị trí mặc định'} · UV max ${f1(w.uv)}</span>
+      <span>${w.loc.source === 'gps' ? '🛰️ GPS' : '📌 Mặc định'} · UV ${f1(w.uv)}${sunStr ? ` · ${sunStr}` : ''}</span>
       <span class="mono">${mode === 'stale' ? '⚠ cũ · ' : ''}${esc(timeAgo(entry.ts))}</span>
     </div>`;
   $('#wx-src').textContent = mode === 'stale' ? 'Cache' : 'Open-Meteo';
@@ -229,7 +278,9 @@ async function updateWeather() {
 export function refresh(force = false) {
   if (inflight) return inflight;
   inflight = (async () => {
-    if (force || !isFresh(cacheGet('weather'), 10 * 60e3)) {
+    const cached = cacheGet('weather');
+    const missingHourly = !Array.isArray(cached?.data?.hourly) || !cached.data.hourly.length;
+    if (force || missingHourly || !isFresh(cached, 10 * 60e3)) {
       await updateWeather();
     }
   })().finally(() => { inflight = null; });
@@ -242,13 +293,20 @@ export function init() {
   if (w) renderWeather(w, isFresh(w, 10 * 60e3) ? 'live' : 'stale');
 }
 
-/** Câu tóm tắt telemetry tự nhiên như phát thanh viên cho TTS */
+/** Câu tóm tắt telemetry tự nhiên như phát thanh viên cho TTS (kèm dự báo giờ mưa cao nhất trong ngày) */
 export function speech() {
   const w = cacheGet('weather')?.data;
   if (!w) return [];
   const desc = (WMO[w.code] || ['thời tiết ổn định'])[0].toLowerCase();
   const h = humidityLevel(w.rh);
-  const seg1 = `Thời tiết tại ${w.loc.name} lúc này ${desc}, nhiệt độ khoảng ${Math.round(w.t)} độ xê. Trong ngày dao động từ ${Math.round(w.tmin)} đến ${Math.round(w.tmax)} độ, khả năng mưa ${Math.round(w.rainMax ?? 0)} phần trăm, gió hướng ${windDir(w.windDeg ?? 0)}, tốc độ ${Math.round(w.wind)} ki lô mét mỗi giờ.`;
+  let peakRainText = '';
+  if (Array.isArray(w.hourly) && w.hourly.length) {
+    const peak = w.hourly.slice(0, 14).reduce((best, s) => (s.rain > (best?.rain ?? -1) ? s : best), null);
+    if (peak && peak.rain >= 40) {
+      peakRainText = ` Lưu ý mưa cao nhất khoảng ${peak.rain} phần trăm vào lúc ${Number(peak.hour)} giờ.`;
+    }
+  }
+  const seg1 = `Thời tiết tại ${w.loc.name} lúc này ${desc}, nhiệt độ khoảng ${Math.round(w.t)} độ xê. Cả ngày dao động từ ${Math.round(w.tmin)} đến ${Math.round(w.tmax)} độ, khả năng mưa ${Math.round(w.rainMax ?? 0)} phần trăm, gió hướng ${windDir(w.windDeg ?? 0)}, ${Math.round(w.wind)} ki lô mét mỗi giờ.${peakRainText}`;
   const aqiText = w.aqi != null
     ? ` Chỉ số chất lượng không khí A Q I ở mức ${Math.round(w.aqi)}, đánh giá ${aqiInfo(w.aqi).label.replace(/\(.*\)/, '').trim().toLowerCase()}.`
     : '';
