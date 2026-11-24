@@ -550,10 +550,10 @@ function markRead(id) {
 
 const findItem = (id) => items.find((i) => i.id === id);
 
-/* ---------- Gemini BYOK ---------- */
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview'];
-const GEMINI_PRO_MODELS = ['gemini-3.1-pro-preview', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
-const NON_TEXT_MODEL_RE = /(image|tts|audio|live|embed|lyria|veo|banana|imagen|aqa|robotics|computer-use)/i;
+/* ---------- Gemini BYOK (tối ưu cho Free Tier, tránh limit: 0 và high demand) ---------- */
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.7-flash'];
+const GEMINI_PRO_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+const NON_TEXT_MODEL_RE = /(image|tts|audio|live|embed|lyria|veo|banana|imagen|aqa|robotics|computer-use|omni)/i;
 
 async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
@@ -568,28 +568,34 @@ async function tryGeminiModel(model, cleanKey, prompt, inlineImage = null) {
       contents: [{ role: 'user', parts }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
     }),
-  }, 40000);
+  }, 18000);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const msg = j.error?.message || `HTTP ${r.status}`;
     if (/API key not valid|API_KEY_INVALID|invalid api key/i.test(msg)) {
       throw new Error(`API_KEY_INVALID: ${msg}`);
     }
-    throw new Error(msg);
+    if (/high demand|overloaded|unavailable/i.test(msg) || r.status === 503) {
+      throw new Error('BUSY');
+    }
+    if (/limit:\s*0/i.test(msg)) {
+      throw new Error('NO_FREE_TIER');
+    }
+    throw new Error(msg.slice(0, 120));
   }
   const text = j.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   if (!text) throw new Error('rỗng');
   return text;
 }
 
-async function discoverModels(cleanKey, pattern = /flash/i) {
+async function discoverModels(cleanKey, pattern = /(flash|gemma)/i) {
   try {
-    const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {}, 10000);
+    const j = await fetchJSON(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`, {}, 8000);
     return (j.models || [])
       .filter((m) => {
         const id = (m.name || '').replace(/^models\//, '');
         return (m.supportedGenerationMethods || []).includes('generateContent')
-          && /^gemini-/i.test(id)
+          && /^(gemini|gemma)-/i.test(id)
           && !NON_TEXT_MODEL_RE.test(id)
           && pattern.test(id);
       })
@@ -600,36 +606,11 @@ async function discoverModels(cleanKey, pattern = /flash/i) {
   }
 }
 
-export async function callGemini(key, prompt, inlineImage = null) {
-  const cleanKey = String(key || '').trim();
+async function runGeminiChain(cleanKey, prompt, inlineImage, preferredList) {
   const tried = new Set();
+  const busyModels = [];
   const errors = [];
-  const runList = async (models) => {
-    for (const model of models) {
-      if (tried.has(model)) continue;
-      tried.add(model);
-      try {
-        return await tryGeminiModel(model, cleanKey, prompt, inlineImage);
-      } catch (e) {
-        if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
-        errors.push(`${model}: ${e.message}`);
-      }
-    }
-    return null;
-  };
-  const first = await runList(GEMINI_MODELS);
-  if (first) return first;
-  const dynamic = await discoverModels(cleanKey, /flash/i);
-  const second = await runList(dynamic.slice(0, 3));
-  if (second) return second;
-  throw new Error(errors.join(' | ') || 'Không gọi được Gemini API');
-}
 
-/** Gọi model Gemini MẠNH NHẤT (ưu tiên dòng Pro cho chẩn đoán kỹ thuật chuyên sâu, tự dò Pro mới nhất) */
-export async function callGeminiPro(key, prompt, inlineImage = null) {
-  const cleanKey = String(key || '').trim();
-  const tried = new Set();
-  const errors = [];
   const runList = async (models) => {
     for (const model of models) {
       if (tried.has(model)) continue;
@@ -639,18 +620,43 @@ export async function callGeminiPro(key, prompt, inlineImage = null) {
         return { text, model };
       } catch (e) {
         if (String(e.message).startsWith('API_KEY_INVALID')) throw e;
-        errors.push(`${model}: ${e.message}`);
+        if (e.message === 'BUSY') busyModels.push(model);
+        else if (e.message !== 'NO_FREE_TIER') errors.push(`${model}: ${e.message}`);
       }
     }
     return null;
   };
-  // Ưu tiên danh sách model text Pro/Flash chuẩn trước, sau đó mới tự dò thêm model text Gemini sạch
-  const first = await runList(GEMINI_PRO_MODELS);
-  if (first) return first;
-  const discovered = await discoverModels(cleanKey, /(pro|flash)/i);
-  const second = await runList(discovered.slice(0, 4));
-  if (second) return second;
-  throw new Error(errors.join(' | ') || 'Không gọi được Gemini Pro API');
+
+  // Lượt 1: Thử các model Flash mạnh nhất trên Free Tier
+  const r1 = await runList(preferredList);
+  if (r1) return r1;
+
+  // Lượt 2: Nếu tất cả đang bận (high demand), thử thêm Gemma (hầu như không bị nghẽn) + các model text khác trên tài khoản
+  const gemmaModels = inlineImage ? [] : await discoverModels(cleanKey, /^gemma-/i);
+  const otherFlash = await discoverModels(cleanKey, /flash/i);
+  const r2 = await runList([...gemmaModels.slice(0, 3), ...otherFlash.slice(0, 3)]);
+  if (r2) return r2;
+
+  // Lượt 3: Chờ 1.5s rồi thử lại đúng model đầu tiên đang bận (high demand thường hết ngay)
+  if (busyModels.length) {
+    await new Promise((res) => setTimeout(res, 1500));
+    try {
+      const text = await tryGeminiModel(busyModels[0], cleanKey, prompt, inlineImage);
+      return { text, model: busyModels[0] };
+    } catch (_) { /* rơi xuống báo lỗi gọn */ }
+    throw new Error(`Máy chủ miễn phí Google đang quá tải tạm thời (${busyModels.slice(0, 3).join(', ')}). Bấm thử lại sau 5–10 giây nhé!`);
+  }
+  throw new Error(errors.slice(0, 2).join(' | ') || 'Không gọi được Gemini API');
+}
+
+export async function callGemini(key, prompt, inlineImage = null) {
+  const res = await runGeminiChain(String(key || '').trim(), prompt, inlineImage, GEMINI_MODELS);
+  return res.text;
+}
+
+/** Gọi model mạnh nhất sẵn có trên API Key (kèm trả về tên model đang chạy) */
+export async function callGeminiPro(key, prompt, inlineImage = null) {
+  return runGeminiChain(String(key || '').trim(), prompt, inlineImage, GEMINI_PRO_MODELS);
 }
 
 function parseBullets(text) {
